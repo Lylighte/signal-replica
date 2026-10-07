@@ -1,0 +1,9 @@
+{
+  "name": "signal-replica",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node tests/scene.test.mjs"
+  }
+}

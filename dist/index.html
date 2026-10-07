@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111214">
+  <title>SIGNAL</title>
+  <meta name="description" content="自定义选项与数字，预览发光、滚动与故障动画。">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111214'/%3E%3Cpath d='M8 7h16v5H13v3h11v10H8v-5h11v-2H8z' fill='%23d9e1a1'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity"><span class="wordmark">SIGNAL<span class="wordmark-dot">.</span></span></div>
+  </header>
+  <main class="workspace">
+    <section class="preview" aria-label="动画预览">
+      <div class="preview-toolbar">
+        <div class="view-switch" role="group" aria-label="画面布局">
+          <button id="view-grid" aria-pressed="true">同屏</button><button id="view-single" aria-pressed="false">单画面</button>
+        </div>
+        <div class="preview-actions"><label class="sr-only" for="aspect-select">预览比例</label><select id="aspect-select" class="aspect-select"><option value="16:9">16:9</option><option value="4:3">4:3</option></select><span id="resolution" class="resolution">1920 × 1080</span><button id="fullscreen" class="quiet-button">全屏</button></div>
+      </div>
+      <div class="stage" id="stage">
+        <div class="scene-window"><canvas id="scene" width="1920" height="1080" role="img" aria-label="四个选项：EZ 10、HD 14、IN 17、AT 18"></canvas></div>
+        <div id="loading" class="stage-loading">正在准备字体…</div>
+        <button id="exit-fullscreen" class="exit-fullscreen" hidden>退出全屏</button>
+      </div>
+      <p id="aspect-note" class="preview-note" hidden>4:3 居中裁切 · 1440 × 1080</p>
+      <p id="preview-status" class="design-error" role="status" hidden></p>
+      <div class="transport">
+        <div class="transport-top">
+          <div class="play-actions"><button id="play" class="play-button" disabled><span class="play-icon" aria-hidden="true">▶</span><span id="play-label">播放</span></button><button id="restart" class="quiet-button">重播</button><button id="still" class="quiet-button">参考静帧</button></div>
+          <div class="time"><span id="current-time">06.63</span><span class="time-divider">/</span><span id="total-time">17.51 s</span></div>
+        </div>
+        <label class="sr-only" for="timeline">动画时间，秒</label><input id="timeline" class="timeline" type="range" min="0" max="17.5" step="0.01" value="6.63">
+        <div class="transport-bottom"><span class="keyboard-hint"><kbd>Space</kbd> 播放 / 暂停</span><div class="preview-export-actions"><button id="export-frames" class="quiet-button">导出视频帧</button><button id="sound" class="quiet-button" aria-pressed="false">声音关闭</button></div></div>
+      </div>
+    </section>
+    <aside class="editor" aria-label="内容编辑">
+      <div class="editor-heading"><div><span class="eyebrow">CONTENT</span><h2>编辑内容</h2></div><span id="option-count" class="count-badge">4 项</span></div>
+      <div id="preset-picker" hidden><label for="preset-select">选项预设</label><select id="preset-select"></select></div>
+      <div class="column-labels" aria-hidden="true"><span>选项</span><span>数字</span></div>
+      <div id="option-list" class="option-list"></div>
+      <button id="add-option" class="add-button">＋ 添加选项</button>
+      <div class="settings-actions"><button id="import-settings" class="quiet-button">导入配置</button><button id="export-settings" class="quiet-button">导出配置</button></div>
+      <input id="settings-file" type="file" accept=".json,application/json" hidden>
+      <div class="single-select" id="single-select-wrap" hidden><label for="selected-option">显示选项</label><select id="selected-option"></select></div>
+      <p id="form-status" class="form-status" aria-live="polite"></p>
+      <section class="design-editor" aria-label="画面参数">
+        <div class="design-heading"><h3>画面参数</h3><button id="reset-design" class="text-button">恢复默认参数</button></div>
+        <p class="design-intro">即时更新，参数保存在本机。</p>
+        <div id="design-groups"></div>
+        <p id="curve-status" class="design-error" role="status" hidden>当前浏览器暂不支持曲面效果。</p>
+      </section>
+      <div class="editor-footer"><span class="font-note">Font: Saira</span><button id="reset" class="text-button">恢复默认内容</button></div>
+    </aside>
+  </main>
+  <dialog id="frame-export-dialog" class="frame-export-dialog" aria-labelledby="frame-export-title">
+    <form method="dialog" class="frame-export-form">
+      <div class="design-heading"><h2 id="frame-export-title">导出视频帧</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>
+      <p class="design-intro">导出 PNG 帧序列 ZIP，单次最多 5000 帧。</p>
+      <div class="frame-export-grid">
+        <label>开始时间（秒）<input id="frame-start" type="number" min="0" max="17.507845804988662" step="0.01" value="0"></label>
+        <label>结束时间（秒）<input id="frame-end" type="number" min="0" max="17.507845804988662" step="0.1" value="17.5"></label>
+        <label>帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"></label>
+        <label>画面比例<select id="frame-aspect"><option value="16:9">16:9 · 1920 × 1080</option><option value="4:3">4:3 · 1440 × 1080</option></select></label>
+      </div>
+      <progress id="frame-progress" class="frame-progress" max="100" value="0" hidden></progress>
+      <p id="frame-export-status" class="form-status" aria-live="polite"></p>
+      <div class="frame-export-footer"><button id="frame-export-cancel" type="button" class="quiet-button" hidden>取消导出</button><button id="frame-export-start" type="button" class="play-button">生成 ZIP</button></div>
+    </form>
+  </dialog>
+  <audio id="soundtrack" src="assets/audio.wav" preload="metadata"></audio>
+  <script type="module" src="studio.js"></script>
+</body>
+</html>
