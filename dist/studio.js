@@ -4,10 +4,12 @@ import {DEFAULT_DESIGN,DESIGN_GROUPS,DESIGN_FIELDS,validateDesign,outsideSliderR
 import {ASPECTS,moveOption,exportSettings,importSettings,previewIssue} from './editor-data.js';
 import {DESIGN_STORAGE_KEY} from './default-settings.js';
 import {exportFrameZip} from './frame-export.js';
-const $=id=>document.getElementById(id),initial=resolveOptionSource(APP_CONFIG.optionSource);
+const $=id=>document.getElementById(id),initial=resolveOptionSource(APP_CONFIG.optionSource),OPTION_STORAGE_KEY='signal-custom-options-v1',defaultCustomOptions=resolveOptionSource({mode:'custom'});
 function loadDesign(){try{return validateDesign(JSON.parse(localStorage.getItem(DESIGN_STORAGE_KEY)??'{}'));}catch{return {...DEFAULT_DESIGN};}}
-const state={options:initial,source:{...APP_CONFIG.optionSource},design:loadDesign(),view:APP_CONFIG.preview.view,aspect:APP_CONFIG.preview.aspect,selectedId:initial.some(option=>option.id===APP_CONFIG.preview.selectedId)?APP_CONFIG.preview.selectedId:initial[0].id,time:APP_CONFIG.stillTime,playing:false,sound:false,ready:false};
-let customDraft=resolveOptionSource({mode:'custom'}),raf=0,clockStart=0,timeStart=0,nextId=1;
+function loadCustomOptions(){try{const saved=localStorage.getItem(OPTION_STORAGE_KEY);return saved?validateOptions(JSON.parse(saved)):structuredClone(defaultCustomOptions);}catch{return structuredClone(defaultCustomOptions);}}
+const customOptions=loadCustomOptions(),activeOptions=APP_CONFIG.optionSource.mode==='custom'?customOptions:initial;
+const state={options:activeOptions,source:{...APP_CONFIG.optionSource},design:loadDesign(),view:APP_CONFIG.preview.view,aspect:APP_CONFIG.preview.aspect,selectedId:activeOptions.some(option=>option.id===APP_CONFIG.preview.selectedId)?APP_CONFIG.preview.selectedId:activeOptions[0].id,time:APP_CONFIG.stillTime,playing:false,sound:false,ready:false};
+let customDraft=structuredClone(customOptions),raf=0,clockStart=0,timeStart=0,nextId=1;
 const renderer=new SignalRenderer($('scene')),audio=$('soundtrack');
 $('timeline').max=APP_CONFIG.duration;$('total-time').textContent=`${APP_CONFIG.duration.toFixed(2)} s`;
 if(!previewIssue(state.design))renderer.setDesign(state.design);
@@ -92,7 +94,7 @@ function renderEditor(){
       input.setAttribute('aria-describedby',error.id);
       input.addEventListener('input',()=>{
         if(locked)return;
-        try{state.options[index]=validateOption({...option,label:label.value,value:value.value});customDraft=structuredClone(state.options);error.hidden=true;label.removeAttribute('aria-invalid');value.removeAttribute('aria-invalid');draw();updateSelect();announce('');}
+        try{state.options[index]=validateOption({...option,label:label.value,value:value.value});customDraft=structuredClone(state.options);saveCustomOptions(customDraft);error.hidden=true;label.removeAttribute('aria-invalid');value.removeAttribute('aria-invalid');draw();updateSelect();announce('');}
         catch(e){error.textContent=e.message;error.hidden=false;input.setAttribute('aria-invalid','true');}
       });
       input.addEventListener('blur',()=>{if(!error.hidden)return;label.value=state.options[index].label;value.value=state.options[index].value;});
@@ -113,8 +115,9 @@ function renderEditor(){
 function replaceOptions(options){
   const validated=validateOptions(options);state.options=validated;
   if(!state.options.some(o=>o.id===state.selectedId))state.selectedId=state.options[0].id;
-  if(state.source.mode==='custom')customDraft=structuredClone(validated);renderEditor();draw();
+  if(state.source.mode==='custom'){customDraft=structuredClone(validated);saveCustomOptions(customDraft);}renderEditor();draw();
 }
+function saveCustomOptions(options){try{localStorage.setItem(OPTION_STORAGE_KEY,JSON.stringify(options));}catch{}}
 function setOptionSource(source){
   const options=resolveOptionSource(source,customDraft);
   if(state.source.mode==='custom')customDraft=structuredClone(state.options);
@@ -210,7 +213,7 @@ $('add-option').onclick=()=>{
   const id=`custom-${Date.now()}-${nextId++}`;replaceOptions([...state.options,{id,label:`OP${state.options.length+1}`,value:'0'}]);
   const rows=$('option-list').querySelectorAll('.option-row');rows[rows.length-1].querySelector('input').focus();
 };
-$('reset').onclick=()=>{if(state.source.mode==='preset')setOptionSource({mode:'preset',presetId:PRESETS[0].id});else replaceOptions(PRESETS[0].options);announce('已恢复默认内容。');};
+$('reset').onclick=()=>{if(state.source.mode==='preset')setOptionSource({mode:'preset',presetId:PRESETS[0].id});else{customDraft=structuredClone(defaultCustomOptions);replaceOptions(defaultCustomOptions);try{localStorage.removeItem(OPTION_STORAGE_KEY);}catch{}}announce('已恢复默认内容。');};
 $('preset-select').replaceChildren(...PRESETS.map(p=>{const o=document.createElement('option');o.value=p.id;o.textContent=p.name;return o;}));$('preset-select').onchange=e=>setOptionSource({mode:'preset',presetId:e.target.value});
 $('play').onclick=()=>state.playing?pause():void play();$('restart').onclick=()=>{seek(0);void play();};$('still').onclick=()=>seek(APP_CONFIG.stillTime);
 $('timeline').addEventListener('input',e=>seek(Number(e.target.value)));$('sound').onclick=toggleSound;

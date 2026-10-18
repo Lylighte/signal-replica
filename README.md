@@ -5,6 +5,7 @@
 ## 功能
 
 - 自定义或预设选项、同屏或单画面预览，支持导入和导出配置。
+- 自定义选项自动保存在本机，刷新后恢复；可一键恢复默认内容。
 - 播放控制、时间轴定位、全屏和静音切换。
 - 可调节数字、间距、光晕、扫描线、曲面和动画参数。
 - 导出 16:9 或 4:3 的 PNG 帧序列 ZIP，支持 1–120 FPS，单次最多 5000 帧。
@@ -22,6 +23,6 @@
 
 ## 技术
 
-原生 HTML、CSS、JavaScript 和 Canvas；无需安装网页依赖。Saira 字体依 SIL Open Font License 随仓库提供。
+原生 HTML、CSS、JavaScript 和 Canvas；无需安装网页依赖。项目采用 MIT License，Saira 字体依 SIL Open Font License 随仓库提供。
 
 仓库代码由 GPT-6 Astra 完成。
