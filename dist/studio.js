@@ -183,7 +183,7 @@ async function runFrameExport(){
 }
 function updateFrameFormat(){
   const isGif=$('frame-format').value==='gif';
-  $('frame-fps-field').hidden=isGif;$('frame-gif-size-field').hidden=!isGif;$('frame-gif-note').hidden=!isGif;
+  $('frame-fps-field').hidden=isGif;$('frame-gif-size-field').hidden=!isGif;
   $('frame-export-intro').textContent=isGif?'导出动画 GIF，固定 12 FPS；尺寸最高 720p。':'导出 PNG 帧序列 ZIP，单次最多 5000 帧。';
   $('frame-export-start').textContent=isGif?'生成 GIF':'生成 ZIP';
 }

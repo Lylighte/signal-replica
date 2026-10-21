@@ -5,12 +5,12 @@ import {DEFAULT_DESIGN,validateDesign} from '../dist/design.js';
 import {sampleColors,buildPalette,indexColors} from '../dist/gif-palette.js';
 
 test('upward pulse occupies five source frames and peaks on the third',()=>{
-  const d={...DEFAULT_DESIGN,shakeStart:1,shakeRepeatStart:10};
+  const d={...DEFAULT_DESIGN,shakeStart:1,shakeRepeatStart:10,shakeDuration:5/30,shakeEdge:.25,shakeShoulder:.7};
   assert.deepEqual(Array.from({length:5},(_,i)=>shakeEnvelope(1+(i+.5)/30,d)),[.25,.7,1,.7,.25]);
   assert.equal(shakeEnvelope(.99,d),0);assert.equal(shakeEnvelope(1+5/30,d),0);
 });
 test('duration stretches the five steps and can disable both pulses',()=>{
-  const d=validateDesign({shakeDuration:.5,shakeStart:1,shakeRepeatStart:3});
+  const d=validateDesign({shakeDuration:.5,shakeStart:1,shakeRepeatStart:3,shakeEdge:.25,shakeShoulder:.7});
   for(const start of [1,3])assert.deepEqual(Array.from({length:5},(_,i)=>shakeEnvelope(start+(i+.5)*.1,d)),[.25,.7,1,.7,.25]);
   assert.equal(shakeEnvelope(1.5,d),0);assert.equal(shakeEnvelope(1,{...d,shakeDuration:0}),0);
 });

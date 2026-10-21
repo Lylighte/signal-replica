@@ -8,6 +8,7 @@
   <meta name="description" content="自定义选项与数字，预览发光、滚动与故障动画。">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111214'/%3E%3Cpath d='M8 7h16v5H13v3h11v10H8v-5h11v-2H8z' fill='%23d9e1a1'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="layout.css">
 </head>
 <body>
   <header class="app-header">
@@ -22,10 +23,12 @@
         </div>
         <div class="preview-actions"><label class="sr-only" for="aspect-select">预览比例</label><select id="aspect-select" class="aspect-select"><option value="16:9">16:9</option><option value="4:3">4:3</option></select><span id="resolution" class="resolution">1920 × 1080</span><button id="fullscreen" class="quiet-button">全屏</button></div>
       </div>
+      <div class="preview-surface">
       <div class="stage" id="stage">
         <div class="scene-window"><canvas id="scene" width="1920" height="1080" role="img" aria-label="四个选项：EZ 10、HD 14、IN 17、AT 18"></canvas></div>
         <div id="loading" class="stage-loading">正在准备字体…</div>
         <button id="exit-fullscreen" class="exit-fullscreen" hidden>退出全屏</button>
+      </div>
       </div>
       <p id="aspect-note" class="preview-note" hidden>4:3 居中裁切 · 1440 × 1080</p>
       <p id="preview-status" class="design-error" role="status" hidden></p>
@@ -35,7 +38,7 @@
           <div class="time"><span id="current-time">06.63</span><span class="time-divider">/</span><span id="total-time">17.51 s</span></div>
         </div>
         <label class="sr-only" for="timeline">动画时间，秒</label><input id="timeline" class="timeline" type="range" min="0" max="17.5" step="0.01" value="6.63">
-        <div class="transport-bottom"><span class="keyboard-hint"><kbd>Space</kbd> 播放 / 暂停</span><div class="preview-export-actions"><button id="export-frames" class="quiet-button">导出视频帧</button><button id="sound" class="quiet-button" aria-pressed="false">声音关闭</button></div></div>
+        <div class="transport-bottom"><span class="keyboard-hint"><kbd>Space</kbd> 播放 / 暂停</span><div class="preview-export-actions"><button id="sound" class="quiet-button" aria-pressed="false">声音关闭</button><button id="export-frames" class="play-button">导出…</button></div></div>
       </div>
     </section>
     <aside class="editor" aria-label="内容编辑">
@@ -59,7 +62,7 @@
   </main>
   <dialog id="frame-export-dialog" class="frame-export-dialog" aria-labelledby="frame-export-title">
     <form method="dialog" class="frame-export-form">
-      <div class="design-heading"><h2 id="frame-export-title">导出视频帧</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>
+      <div class="design-heading"><h2 id="frame-export-title">导出…</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>
       <p id="frame-export-intro" class="design-intro">导出 PNG 帧序列 ZIP，单次最多 5000 帧。</p>
       <div class="frame-export-grid">
         <label>格式<select id="frame-format"><option value="png">PNG 帧序列 ZIP</option><option value="gif">动画 GIF</option></select></label>
@@ -67,8 +70,7 @@
         <label>结束时间（秒）<input id="frame-end" type="number" min="0" max="17.507845804988662" step="0.1" value="17.5"></label>
         <label>画面比例<select id="frame-aspect"><option value="16:9">16:9</option><option value="4:3">4:3</option></select></label>
         <label id="frame-fps-field">帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"></label>
-        <label id="frame-gif-size-field" hidden>GIF 尺寸<select id="frame-gif-size"><option value="720p">720p · 最大尺寸</option><option value="540p">540p</option><option value="360p">360p</option></select></label>
-        <span id="frame-gif-note" class="gif-export-note" hidden>GIF 帧率固定为 12 FPS。</span>
+        <label id="frame-gif-size-field" hidden>GIF 尺寸<select id="frame-gif-size"><option value="720p">720p</option><option value="540p">540p</option><option value="360p">360p</option></select></label>
       </div>
       <progress id="frame-progress" class="frame-progress" max="100" value="0" hidden></progress>
       <p id="frame-export-status" class="form-status" aria-live="polite"></p>
