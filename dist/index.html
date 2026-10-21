@@ -60,12 +60,15 @@
   <dialog id="frame-export-dialog" class="frame-export-dialog" aria-labelledby="frame-export-title">
     <form method="dialog" class="frame-export-form">
       <div class="design-heading"><h2 id="frame-export-title">导出视频帧</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>
-      <p class="design-intro">导出 PNG 帧序列 ZIP，单次最多 5000 帧。</p>
+      <p id="frame-export-intro" class="design-intro">导出 PNG 帧序列 ZIP，单次最多 5000 帧。</p>
       <div class="frame-export-grid">
+        <label>格式<select id="frame-format"><option value="png">PNG 帧序列 ZIP</option><option value="gif">动画 GIF</option></select></label>
         <label>开始时间（秒）<input id="frame-start" type="number" min="0" max="17.507845804988662" step="0.01" value="0"></label>
         <label>结束时间（秒）<input id="frame-end" type="number" min="0" max="17.507845804988662" step="0.1" value="17.5"></label>
-        <label>帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"></label>
-        <label>画面比例<select id="frame-aspect"><option value="16:9">16:9 · 1920 × 1080</option><option value="4:3">4:3 · 1440 × 1080</option></select></label>
+        <label>画面比例<select id="frame-aspect"><option value="16:9">16:9</option><option value="4:3">4:3</option></select></label>
+        <label id="frame-fps-field">帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"></label>
+        <label id="frame-gif-size-field" hidden>GIF 尺寸<select id="frame-gif-size"><option value="720p">720p · 最大尺寸</option><option value="540p">540p</option><option value="360p">360p</option></select></label>
+        <span id="frame-gif-note" class="gif-export-note" hidden>GIF 帧率固定为 12 FPS。</span>
       </div>
       <progress id="frame-progress" class="frame-progress" max="100" value="0" hidden></progress>
       <p id="frame-export-status" class="form-status" aria-live="polite"></p>
