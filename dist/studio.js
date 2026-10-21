@@ -5,6 +5,7 @@ import {ASPECTS,moveOption,exportSettings,importSettings,previewIssue} from './e
 import {DESIGN_STORAGE_KEY} from './default-settings.js';
 import {exportFrameZip} from './frame-export.js';
 import {exportGif} from './gif-export.js';
+import {GIF_PROFILES,DEFAULT_GIF_PROFILE} from './gif-options.js';
 const $=id=>document.getElementById(id),initial=resolveOptionSource(APP_CONFIG.optionSource),OPTION_STORAGE_KEY='signal-custom-options-v1',defaultCustomOptions=resolveOptionSource({mode:'custom'});
 function loadDesign(){try{return validateDesign(JSON.parse(localStorage.getItem(DESIGN_STORAGE_KEY)??'{}'));}catch{return {...DEFAULT_DESIGN};}}
 function loadCustomOptions(){try{const saved=localStorage.getItem(OPTION_STORAGE_KEY);return saved?validateOptions(JSON.parse(saved)):structuredClone(defaultCustomOptions);}catch{return structuredClone(defaultCustomOptions);}}
@@ -151,7 +152,7 @@ function downloadSettings(){
 let frameExportRunning=false,frameExportCancelled=false;
 function openFrameExport(){
   $('frame-start').value='0';$('frame-end').value=(Math.floor(APP_CONFIG.duration*10)/10).toFixed(1);$('frame-aspect').value=state.aspect;
-  $('frame-format').value='png';$('frame-gif-size').value='720p';updateFrameFormat();
+  $('frame-format').value='png';$('frame-gif-compression').value=DEFAULT_GIF_PROFILE;$('frame-gif-size').value=GIF_PROFILES[DEFAULT_GIF_PROFILE].size;updateFrameFormat();
   $('frame-progress').hidden=true;$('frame-progress').value=0;$('frame-export-cancel').hidden=true;
   $('frame-export-start').disabled=false;$('frame-export-status').textContent='';
   $('frame-export-close').disabled=false;
@@ -171,20 +172,21 @@ async function runFrameExport(){
     };
     const isGif=$('frame-format').value==='gif';
     const result=isGif
-      ?await exportGif({...settings,size:$('frame-gif-size').value})
+      ?await exportGif({...settings,size:$('frame-gif-size').value,compression:$('frame-gif-compression').value})
       :await exportFrameZip({...settings,fps:Number($('frame-fps').value)});
     if(!result){status.textContent='导出已取消。';return;}
     const extension=isGif?'gif':'zip',formatLabel=isGif?'GIF':'ZIP';
     const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=`signal-frames-${result.width}x${result.height}-${result.fps}fps.${extension}`;link.click();
     setTimeout(()=>URL.revokeObjectURL(url),60000);
-    status.textContent=`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），${formatLabel} 已开始下载。`;
+    const bytes=result.blob.size,volume=bytes<1024*1024?`${(bytes/1024).toFixed(1)} KB`:`${(bytes/1024/1024).toFixed(2)} MB`;
+    status.textContent=`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），${formatLabel} ${volume} 已开始下载。`;
   }catch(error){status.textContent=`导出失败：${error.message}`;}
   finally{frameExportRunning=false;button.disabled=false;$('frame-export-close').disabled=false;cancel.hidden=true;}
 }
 function updateFrameFormat(){
   const isGif=$('frame-format').value==='gif';
-  $('frame-fps-field').hidden=isGif;$('frame-gif-size-field').hidden=!isGif;
-  $('frame-export-intro').textContent=isGif?'导出动画 GIF，固定 12 FPS；尺寸最高 720p。':'导出 PNG 帧序列 ZIP，单次最多 5000 帧。';
+  $('frame-fps-field').hidden=isGif;$('frame-gif-size-field').hidden=!isGif;$('frame-gif-compression-field').hidden=!isGif;
+  $('frame-export-intro').textContent=isGif?'动画 GIF':'导出 PNG 帧序列 ZIP，单次最多 5000 帧。';
   $('frame-export-start').textContent=isGif?'生成 GIF':'生成 ZIP';
 }
 function updatePlayButton(){$('play-label').textContent=state.playing?'暂停':state.time>=APP_CONFIG.duration?'再播放':'播放';document.querySelector('.play-icon').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-label',state.playing?'暂停动画':'播放动画');}
@@ -215,6 +217,8 @@ $('aspect-select').onchange=e=>setAspect(e.target.value);
 $('export-settings').onclick=downloadSettings;
 $('export-frames').onclick=openFrameExport;$('frame-export-start').onclick=()=>void runFrameExport();
 $('frame-format').onchange=updateFrameFormat;$('frame-aspect').onchange=updateFrameFormat;
+$('frame-gif-compression').onchange=()=>{$('frame-gif-size').value=GIF_PROFILES[$('frame-gif-compression').value].size;updateFrameFormat();};
+$('frame-gif-size').onchange=updateFrameFormat;
 $('frame-export-cancel').onclick=()=>{$('frame-export-status').textContent='正在取消…';frameExportCancelled=true;};
 $('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();frameExportCancelled=true;$('frame-export-status').textContent='正在取消…';}});
 $('import-settings').onclick=()=>{$('settings-file').value='';$('settings-file').click();};
