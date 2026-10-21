@@ -186,7 +186,7 @@ async function runFrameExport(){
 function updateFrameFormat(){
   const isGif=$('frame-format').value==='gif';
   $('frame-fps-field').hidden=isGif;$('frame-gif-size-field').hidden=!isGif;$('frame-gif-compression-field').hidden=!isGif;
-  $('frame-export-intro').textContent=isGif?'动画 GIF':'导出 PNG 帧序列 ZIP，单次最多 5000 帧。';
+  $('frame-export-intro').textContent=isGif?'动画 GIF':'PNG 帧序列 ZIP，单次最多 5000 帧。';
   $('frame-export-start').textContent=isGif?'生成 GIF':'生成 ZIP';
 }
 function updatePlayButton(){$('play-label').textContent=state.playing?'暂停':state.time>=APP_CONFIG.duration?'再播放':'播放';document.querySelector('.play-icon').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-label',state.playing?'暂停动画':'播放动画');}
