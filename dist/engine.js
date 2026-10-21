@@ -1,6 +1,7 @@
 import {APP_CONFIG,MOTION} from './config.js';
 import {DEFAULT_DESIGN,validateDesign} from './design.js';
 import {ScreenCurve} from './screen-curve.js';
+import {SignalDistortion} from './signal-distortion.js';
 export const WIDTH=1920, HEIGHT=1080;
 export const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
 export const numberSettleEnd=(count,design=DEFAULT_DESIGN)=>MOTION.numberSettle+(count-1)*design.settleStagger;
@@ -177,6 +178,7 @@ export class SignalRenderer {
     const scan=this.scanlines.getContext('2d');scan.fillStyle=`rgba(0,0,0,${design.scanLineStrength})`;
     for(let y=0;y<HEIGHT;y+=design.scanLineSpacing)scan.fillRect(0,y,WIDTH,Math.min(design.scanLineWidth,design.scanLineSpacing-1));
     this.noiseTexture=makeCanvas(WIDTH,HEIGHT);this.noiseSeed=-1;
+    this.signalDistortion??=new SignalDistortion(WIDTH,HEIGHT);
   }
   glyph(digit){
     if(this.glyphs.has(digit))return this.glyphs.get(digit);
@@ -336,6 +338,7 @@ export class SignalRenderer {
     }
     this.drawPreRollNoise(output,t);
     output.drawImage(this.scanlines,0,0);
+    this.signalDistortion.apply(this.canvas,output,t,design,entranceGlitch);
     if(t>MOTION.fadeStart){output.fillStyle=`rgba(0,0,0,${smooth((t-MOTION.fadeStart)/.12)})`;output.fillRect(0,0,WIDTH,HEIGHT);}
     this.curvatureSupported=design.screenCurve!=='curved'||this.screenCurve.apply(this.canvas,output,design.screenCurvature);
   }

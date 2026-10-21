@@ -48,6 +48,13 @@ const ORIGINAL_GROUPS=[
     choice('screenCurve','老电视机曲面',[{value:'flat',label:'关闭'},{value:'curved',label:'开启'}]),
     field('screenCurvature','曲面弯曲强度',0,0.12,.005)
   ]},
+  {name:'色差与抖动',open:false,fields:[
+    field('chromaticStrength','色差强度',0,1,.01),field('chromaticOffset','色差通道偏移',0,16,.1,'px'),
+    field('chromaticBandHeight','入场色差条带高度',1,100,1,'px'),
+    field('shakeAmplitude','向上抖动幅度',0,40,.1,'px'),field('shakeDuration','单次抖动持续时间',0,1,.001,'s'),
+    field('shakeStart','首次抖动时点',0,17.5,.01,'s'),field('shakeRepeatStart','再次抖动时点',0,17.5,.01,'s'),
+    field('shakeEdge','首尾帧位移比例',0,1,.01),field('shakeShoulder','第二、四帧位移比例',0,1,.01)
+  ]},
   {name:'滚动与右推',open:false,fields:[
     field('rollSpeed','整体滚动速度',.25,3,.01),field('placeRatio','高位初始速度比例',.05,.8,.01),
     field('placeStagger','各位加速错开',0,.8,.01,'s'),field('speedConverge','接近同速所需时间',4,9,.01,'s'),
@@ -67,7 +74,8 @@ export const DESIGN_GROUPS=[
   group('加速滚动与右推','rollSpeed placeRatio placeStagger speedConverge pushDuration revealStagger'),
   group('画面亮度与拖影','centerBrightness edgeBrightness vignetteKnee motionBlur'),
   group('扫描线与曲面','scanStrength scanSpacing scanLineStrength scanLineSpacing scanLineWidth screenCurve screenCurvature'),
-  group('噪声与故障','noiseStrength noiseDensity noiseBlockSize noiseBandStrength glitchStrength flashBrightness washBrightness')
+  group('噪声与故障','noiseStrength noiseDensity noiseBlockSize noiseBandStrength glitchStrength flashBrightness washBrightness'),
+  group('色差与抖动','chromaticStrength chromaticOffset chromaticBandHeight shakeAmplitude shakeDuration shakeStart shakeRepeatStart shakeEdge shakeShoulder')
 ];
 export const DEFAULT_DESIGN=Object.freeze(Object.fromEntries(DESIGN_FIELDS.map(f=>[f.key,f.value])));
 export const outsideSliderRange=(field,value)=>!field.options&&(value<field.min||value>field.max);

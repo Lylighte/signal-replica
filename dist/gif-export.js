@@ -1,6 +1,7 @@
 import {APP_CONFIG} from './config.js';
 import {SignalRenderer,WIDTH,HEIGHT} from './engine.js';
 import {previewIssue} from './editor-data.js';
+import {sampleColors,buildPalette,indexColors} from './gif-palette.js';
 
 export const GIF_FPS=12;
 const MAX_FRAMES=5000;
@@ -11,7 +12,7 @@ const GIF_SIZES={
 };
 const u16=value=>Uint8Array.of(value&255,(value>>>8)&255);
 
-function lzwEncode(indices){
+export function lzwEncode(indices){
   const clear=256,end=257,bytes=[];let bitBuffer=0,bitCount=0;
   const dictionary=new Map();let nextCode=258,codeSize=9;
   const write=code=>{
@@ -26,11 +27,14 @@ function lzwEncode(indices){
       const symbol=indices[index],key=prefix*256+symbol,known=dictionary.get(key);
       if(known!==undefined){prefix=known;continue;}
       write(prefix);
-      if(nextCode<4096){dictionary.set(key,nextCode++);if(nextCode===(1<<codeSize)&&codeSize<12)codeSize++;}
+      // The decoder creates entries one emitted code later than the encoder.
+      if(nextCode===(1<<codeSize)&&codeSize<12)codeSize++;
+      if(nextCode<4096){dictionary.set(key,nextCode++);}
       else{write(clear);reset();}
       prefix=symbol;
     }
     write(prefix);
+    if(nextCode===(1<<codeSize)&&codeSize<12)codeSize++;
   }
   write(end);if(bitCount)bytes.push(bitBuffer&255);
   const blocks=[Uint8Array.of(8)];
@@ -38,11 +42,6 @@ function lzwEncode(indices){
   blocks.push(Uint8Array.of(0));return blocks;
 }
 
-function makePalette(){
-  const palette=new Uint8Array(768);
-  for(let value=0;value<256;value++)palette.set([value,value,value],value*3);
-  return palette;
-}
 function graphicsControl(delay){return Uint8Array.of(0x21,0xf9,4,0,u16(delay)[0],u16(delay)[1],0,0);}
 function imageDescriptor(width,height){return Uint8Array.of(0x2c,0,0,0,0,...u16(width),...u16(height),0);}
 function frameDelay(index){return Math.round((index+1)*100/GIF_FPS)-Math.round(index*100/GIF_FPS);}
@@ -61,20 +60,30 @@ export async function exportGif({options,design,view,selectedId,aspect,start,end
   const output=document.createElement('canvas');output.width=width;output.height=height;
   const context=output.getContext('2d',{alpha:false,willReadFrequently:true});
   if(!context)throw new Error('无法创建 GIF 画布。');
-  const chunks=[new TextEncoder().encode('GIF89a'),u16(width),u16(height),Uint8Array.of(0xf7,0,0),makePalette(),Uint8Array.of(0x21,0xff,11),new TextEncoder().encode('NETSCAPE2.0'),Uint8Array.of(3,1,0,0,0)];
+  const renderPixels=time=>{
+    renderer.render(time,options,view,selectedId);
+    if(design.screenCurve==='curved'&&!renderer.curvatureSupported)throw new Error('当前浏览器未能渲染曲面效果，已停止导出。');
+    context.fillStyle='#000';context.fillRect(0,0,width,height);
+    if(aspect==='4:3')context.drawImage(source,240,0,1440,1080,0,0,width,height);
+    else context.drawImage(source,0,0,1920,1080,0,0,width,height);
+    return context.getImageData(0,0,width,height).data;
+  };
   try{
+    const histogram=new Map();
     for(let index=0;index<frameCount;index++){
       if(isCancelled())return null;
       const time=Math.min(end,start+index/GIF_FPS);
-      renderer.render(time,options,view,selectedId);
-      if(design.screenCurve==='curved'&&!renderer.curvatureSupported)throw new Error('当前浏览器未能渲染曲面效果，已停止导出。');
-      context.fillStyle='#000';context.fillRect(0,0,width,height);
-      if(aspect==='4:3')context.drawImage(source,240,0,1440,1080,0,0,width,height);
-      else context.drawImage(source,0,0,1920,1080,0,0,width,height);
-      const rgba=context.getImageData(0,0,width,height).data,indices=new Uint8Array(width*height);
-      for(let pixel=0,offset=0;pixel<indices.length;pixel++,offset+=4)indices[pixel]=Math.round(rgba[offset]*0.2126+rgba[offset+1]*0.7152+rgba[offset+2]*0.0722);
+      sampleColors(histogram,renderPixels(time));onProgress(index+1,frameCount,time,'palette');
+      await new Promise(resolve=>requestAnimationFrame(resolve));
+    }
+    const colors=buildPalette(histogram),cache=new Map();
+    const chunks=[new TextEncoder().encode('GIF89a'),u16(width),u16(height),Uint8Array.of(0xf7,0,0),colors.palette,Uint8Array.of(0x21,0xff,11),new TextEncoder().encode('NETSCAPE2.0'),Uint8Array.of(3,1,0,0,0)];
+    for(let index=0;index<frameCount;index++){
+      if(isCancelled())return null;
+      const time=Math.min(end,start+index/GIF_FPS);
+      const indices=indexColors(renderPixels(time),colors,cache);
       chunks.push(graphicsControl(frameDelay(index)),imageDescriptor(width,height),...lzwEncode(indices));
-      onProgress(index+1,frameCount,time);
+      onProgress(index+1,frameCount,time,'encode');
       await new Promise(resolve=>requestAnimationFrame(resolve));
     }
     chunks.push(Uint8Array.of(0x3b));

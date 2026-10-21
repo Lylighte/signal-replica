@@ -4,7 +4,7 @@ import {DEFAULT_DESIGN,DESIGN_GROUPS,DESIGN_FIELDS,validateDesign,outsideSliderR
 import {ASPECTS,moveOption,exportSettings,importSettings,previewIssue} from './editor-data.js';
 import {DESIGN_STORAGE_KEY} from './default-settings.js';
 import {exportFrameZip} from './frame-export.js';
-import {exportGif,GIF_FPS} from './gif-export.js';
+import {exportGif} from './gif-export.js';
 const $=id=>document.getElementById(id),initial=resolveOptionSource(APP_CONFIG.optionSource),OPTION_STORAGE_KEY='signal-custom-options-v1',defaultCustomOptions=resolveOptionSource({mode:'custom'});
 function loadDesign(){try{return validateDesign(JSON.parse(localStorage.getItem(DESIGN_STORAGE_KEY)??'{}'));}catch{return {...DEFAULT_DESIGN};}}
 function loadCustomOptions(){try{const saved=localStorage.getItem(OPTION_STORAGE_KEY);return saved?validateOptions(JSON.parse(saved)):structuredClone(defaultCustomOptions);}catch{return structuredClone(defaultCustomOptions);}}
@@ -167,7 +167,7 @@ async function runFrameExport(){
       options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,
       aspect:$('frame-aspect').value,start:Number($('frame-start').value),end:Number($('frame-end').value),
       isCancelled:()=>frameExportCancelled,
-      onProgress:(complete,total,time)=>{progress.value=complete/total*100;status.textContent=`正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}
+      onProgress:(complete,total,time,phase)=>{progress.value=phase==='palette'?complete/total*50:phase==='encode'?50+complete/total*50:complete/total*100;status.textContent=`${phase==='palette'?'正在采样颜色':'正在渲染'} ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}
     };
     const isGif=$('frame-format').value==='gif';
     const result=isGif
