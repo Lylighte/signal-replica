@@ -8,8 +8,9 @@ export function sampleColors(histogram,rgba,stride=4){
     entry[0]+=r;entry[1]+=g;entry[2]+=b;entry[3]++;histogram.set(key,entry);
   }
 }
-export function buildPalette(histogram){
-  const palette=new Uint8Array(768),grayCount=histogram.size?128:256;
+export function buildPalette(histogram,colorCount=256){
+  if(![8,16,32,64,128,256].includes(colorCount))throw new Error('GIF 色数无效。');
+  const palette=new Uint8Array(colorCount*3),grayCount=histogram.size?colorCount/2:colorCount;
   for(let i=0;i<grayCount;i++)palette.fill(Math.round(i*255/(grayCount-1)),i*3,i*3+3);
   if(!histogram.size)return{palette,grayCount};
   const points=Array.from(histogram.values(),p=>[p[0]/p[3],p[1]/p[3],p[2]/p[3],p[3]]);
@@ -19,7 +20,7 @@ export function buildPalette(histogram){
     return{points,axis,weight,score:points.length>1?ranges[axis]*Math.sqrt(weight):-1};
   };
   const boxes=[box(points)];
-  while(boxes.length<128){
+  while(boxes.length<colorCount-grayCount){
     boxes.sort((a,b)=>b.score-a.score);const current=boxes[0];if(current.score<0)break;
     current.points.sort((a,b)=>a[current.axis]-b[current.axis]);
     let accumulated=0,cut=1;
@@ -27,9 +28,9 @@ export function buildPalette(histogram){
     cut=Math.min(cut,current.points.length-1);
     boxes.splice(0,1,box(current.points.slice(0,cut)),box(current.points.slice(cut)));
   }
-  for(let i=0;i<128;i++){
+  for(let i=0;i<colorCount-grayCount;i++){
     const current=boxes[i%boxes.length];
-    for(let c=0;c<3;c++)palette[(128+i)*3+c]=Math.round(current.points.reduce((n,p)=>n+p[c]*p[3],0)/current.weight);
+    for(let c=0;c<3;c++)palette[(grayCount+i)*3+c]=Math.round(current.points.reduce((n,p)=>n+p[c]*p[3],0)/current.weight);
   }
   return{palette,grayCount};
 }
@@ -43,7 +44,7 @@ export function indexColors(rgba,{palette,grayCount},cache=new Map()){
       let best=Infinity;match=0;
       // Use bin centers so results don't depend on frame traversal order.
       const rr=(r&248)+3.5,gg=(g&248)+3.5,bb=(b&248)+3.5;
-      for(let color=0;color<256;color++){
+      for(let color=0;color<palette.length/3;color++){
         const d=(rr-palette[color*3])**2+(gg-palette[color*3+1])**2+(bb-palette[color*3+2])**2;
         if(d<best){best=d;match=color;}
       }

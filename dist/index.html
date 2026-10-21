@@ -70,7 +70,8 @@
         <label>结束时间（秒）<input id="frame-end" type="number" min="0" max="17.507845804988662" step="0.1" value="17.5"></label>
         <label>画面比例<select id="frame-aspect"><option value="16:9">16:9</option><option value="4:3">4:3</option></select></label>
         <label id="frame-fps-field">帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"></label>
-        <label id="frame-gif-size-field" hidden>GIF 尺寸<select id="frame-gif-size"><option value="720p">720p</option><option value="540p">540p</option><option value="360p">360p</option></select></label>
+        <label id="frame-gif-compression-field" hidden>GIF 压缩<select id="frame-gif-compression"><option value="standard">标准 · 12 FPS · 256 色</option><option value="compact">压缩 · 8 FPS · 64 色</option><option value="small" selected>高压缩 · 6 FPS · 32 色</option><option value="extreme">极限压缩 · 4 FPS · 16 色</option></select></label>
+        <label id="frame-gif-size-field" hidden>GIF 尺寸<select id="frame-gif-size"><option value="720p">720p</option><option value="540p">540p</option><option value="360p">360p</option><option value="240p" selected>240p</option><option value="144p">144p</option><option value="90p">90p</option></select></label>
       </div>
       <progress id="frame-progress" class="frame-progress" max="100" value="0" hidden></progress>
       <p id="frame-export-status" class="form-status" aria-live="polite"></p>
