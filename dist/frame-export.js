@@ -1,6 +1,6 @@
 import {APP_CONFIG} from './config.js';
-import {SignalRenderer,WIDTH,HEIGHT} from './engine.js';
 import {previewIssue} from './editor-data.js';
+import {createExportRenderer,getExportResolution} from './render-export.js';
 
 const MAX_FRAMES=5000;
 const crcTable=(()=>{
@@ -32,38 +32,31 @@ const frameName=index=>`frames/frame_${String(index).padStart(6,'0')}.png`;
 export async function exportFrameZip({options,design,view,selectedId,aspect,start,end,fps,onProgress=()=>{},isCancelled=()=>false}){
   if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||end>APP_CONFIG.duration)throw new Error(`时间范围需在 0–${APP_CONFIG.duration.toFixed(2)} 秒内，并且起点不晚于终点。`);
   if(!Number.isInteger(fps)||fps<1||fps>120)throw new Error('帧率需为 1–120 的整数。');
-  if(!['16:9','4:3'].includes(aspect))throw new Error('画面比例无效。');
+  getExportResolution(aspect);
   const issue=previewIssue(design);if(issue)throw new Error(issue);
   const frameCount=Math.floor((end-start)*fps+1e-9)+1;
   if(frameCount>MAX_FRAMES)throw new Error(`单次导出最多 ${MAX_FRAMES} 帧，请缩短时间范围或降低帧率。`);
-  const {width,height}=aspect==='4:3'?{width:1440,height:1080}:{width:1920,height:1080};
-  const canvas=document.createElement('canvas');canvas.width=WIDTH;canvas.height=HEIGHT;
-  const renderer=new SignalRenderer(canvas);renderer.setDesign(design);
-  const output=document.createElement('canvas');output.width=width;output.height=height;
-  const ctx=output.getContext('2d',{alpha:false});
+  const frameRenderer=createExportRenderer({design,aspect}),{canvas:output,width,height}=frameRenderer;
   const rows=[],parts=[];let localOffset=0;
   const addFile=async(name,blob)=>{
     const bytes=new Uint8Array(await blob.arrayBuffer()),crc=crc32(bytes),{header,filename}=zipHeader(name,crc,bytes.length);
     if(localOffset+header.length+filename.length+bytes.length>0xffffffff)throw new Error('ZIP 文件超出浏览器支持的大小，请缩短导出时长或降低帧率。');
     parts.push(header,filename,blob);rows.push({name,crc,size:bytes.length,offset:localOffset});localOffset+=header.length+filename.length+bytes.length;
   };
-  for(let index=0;index<frameCount;index++){
-    if(isCancelled())return null;
-    const time=Math.min(end,start+index/fps);
-    renderer.render(time,options,view,selectedId);
-    if(design.screenCurve==='curved'&&!renderer.curvatureSupported)throw new Error('当前浏览器未能渲染曲面效果，已停止导出。');
-    ctx.fillStyle='#000';ctx.fillRect(0,0,width,height);
-    if(aspect==='4:3')ctx.drawImage(canvas,240,0,1440,1080,0,0,1440,1080);
-    else ctx.drawImage(canvas,0,0,width,height);
-    await addFile(frameName(index),await pngBlob(output));
-    onProgress(index+1,frameCount,time);
-    await new Promise(resolve=>requestAnimationFrame(()=>resolve()));
-  }
-  const manifest={format:'signal-frame-sequence',version:1,frameRate:fps,frameCount,startSeconds:start,endSeconds:Math.min(end,start+(frameCount-1)/fps),sequenceDurationSeconds:frameCount/fps,aspect,resolution:`${width}x${height}`,filenamePattern:'frames/frame_000000.png',options,design};
-  await addFile('manifest.json',new Blob([JSON.stringify(manifest,null,2)+'\n'],{type:'application/json'}));
-  let centralSize=0;
-  for(const row of rows){const item=zipHeader(row.name,row.crc,row.size,row.offset,true);parts.push(item.header,item.filename);centralSize+=item.header.length+item.filename.length;}
-  parts.push(zipEnd(rows.length,centralSize,localOffset));
-  const blob=new Blob(parts,{type:'application/zip'});renderer.canvas.width=1;renderer.canvas.height=1;output.width=1;output.height=1;
-  return{blob,frameCount,width,height,fps};
+  try{
+    for(let index=0;index<frameCount;index++){
+      if(isCancelled())return null;
+      const time=Math.min(end,start+index/fps);
+      frameRenderer.render(time,options,view,selectedId);
+      await addFile(frameName(index),await pngBlob(output));
+      onProgress(index+1,frameCount,time);
+      await new Promise(resolve=>requestAnimationFrame(()=>resolve()));
+    }
+    const manifest={format:'signal-frame-sequence',version:1,frameRate:fps,frameCount,startSeconds:start,endSeconds:Math.min(end,start+(frameCount-1)/fps),sequenceDurationSeconds:frameCount/fps,aspect,resolution:`${width}x${height}`,filenamePattern:'frames/frame_000000.png',options,design};
+    await addFile('manifest.json',new Blob([JSON.stringify(manifest,null,2)+'\n'],{type:'application/json'}));
+    let centralSize=0;
+    for(const row of rows){const item=zipHeader(row.name,row.crc,row.size,row.offset,true);parts.push(item.header,item.filename);centralSize+=item.header.length+item.filename.length;}
+    parts.push(zipEnd(rows.length,centralSize,localOffset));
+    return{blob:new Blob(parts,{type:'application/zip'}),frameCount,width,height,fps};
+  }finally{frameRenderer.dispose();}
 }

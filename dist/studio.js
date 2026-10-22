@@ -147,32 +147,91 @@ function downloadSettings(){
   link.href=url;link.download='signal-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   announce('已导出选项顺序、数字、画面参数和预览设置。');
 }
-let frameExportRunning=false,frameExportCancelled=false;
+let frameExportRunning=false,frameExportController=null,frameExportSupportRevision=0,videoExporterPromise=null,frameExportCheckTimer=0;
+const frameExportFieldIds=['export-format','frame-start','frame-end','frame-fps','frame-aspect','frame-audio'];
+const loadVideoExporter=()=>videoExporterPromise??=import('./video-export.js');
+function readFrameExportSettings(){
+  const number=(id,label)=>{const value=$(id).value.trim();if(value==='')throw new Error(`请输入${label}。`);return Number(value);};
+  const format=$('export-format').value;if(!['mp4','zip'].includes(format))throw new Error('导出格式无效。');
+  return{
+    format,start:number('frame-start','开始时间'),end:number('frame-end','结束时间'),
+    fps:number('frame-fps','帧率'),aspect:$('frame-aspect').value,includeAudio:$('frame-audio').checked
+  };
+}
+function setFrameExportFieldsDisabled(disabled){for(const id of frameExportFieldIds)$(id).disabled=disabled;}
+function updateFrameExportFormat(){
+  const mp4=$('export-format').value==='mp4',fps=$('frame-fps');
+  $('frame-audio-row').hidden=!mp4;
+  $('frame-export-intro').textContent=mp4?'逐帧渲染并在浏览器中生成 H.264 / AAC MP4。':'逐帧渲染无损 PNG，并打包为 ZIP。';
+  $('frame-export-start').textContent=mp4?'生成 MP4':'生成 ZIP';
+  if(mp4){fps.min='30';fps.max='60';fps.step='30';if(![30,60].includes(Number(fps.value)))fps.value='30';}
+  else{fps.min='1';fps.max='120';fps.step='1';}
+}
+async function refreshFrameExportSupport(){
+  clearTimeout(frameExportCheckTimer);
+  if(frameExportRunning)return;
+  const revision=++frameExportSupportRevision,status=$('frame-export-status'),button=$('frame-export-start');
+  updateFrameExportFormat();
+  if($('export-format').value==='zip'){status.textContent='PNG ZIP 支持 1–120 FPS；帧序列会包含结束时刻画面。';button.disabled=false;return;}
+  button.disabled=true;status.textContent='正在检查本机 H.264 / AAC 编码兼容性…';
+  try{
+    const settings=readFrameExportSettings(),{checkMp4ExportSupport}=await loadVideoExporter();
+    await checkMp4ExportSupport(settings);
+    if(revision!==frameExportSupportRevision||frameExportRunning||!$('frame-export-dialog').open)return;
+    status.textContent=`编码器可用：H.264 ${settings.fps} FPS${settings.includeAudio?' + AAC 原版音轨':'（无音轨）'}。`;
+    button.disabled=false;
+  }catch(error){
+    if(revision!==frameExportSupportRevision||frameExportRunning||!$('frame-export-dialog').open)return;
+    status.textContent=`当前设置无法导出 MP4：${error.message}`;button.disabled=true;
+  }
+}
+function scheduleFrameExportSupportCheck(){
+  clearTimeout(frameExportCheckTimer);
+  frameExportCheckTimer=setTimeout(()=>void refreshFrameExportSupport(),150);
+}
 function openFrameExport(){
-  $('frame-start').value='0';$('frame-end').value=(Math.floor(APP_CONFIG.duration*10)/10).toFixed(1);$('frame-aspect').value=state.aspect;
+  $('export-format').value='mp4';$('frame-start').value='0';$('frame-end').value=String(APP_CONFIG.duration);$('frame-fps').value='30';$('frame-aspect').value=state.aspect;$('frame-audio').checked=true;
   $('frame-progress').hidden=true;$('frame-progress').value=0;$('frame-export-cancel').hidden=true;
-  $('frame-export-start').disabled=false;$('frame-export-status').textContent='';
+  $('frame-export-start').disabled=true;$('frame-export-status').textContent='';
   $('frame-export-close').disabled=false;
+  setFrameExportFieldsDisabled(false);updateFrameExportFormat();
   $('frame-export-dialog').showModal();
+  void refreshFrameExportSupport();
 }
 async function runFrameExport(){
   if(frameExportRunning)return;
-  frameExportRunning=true;frameExportCancelled=false;
   const button=$('frame-export-start'),cancel=$('frame-export-cancel'),progress=$('frame-progress'),status=$('frame-export-status');
-  button.disabled=true;cancel.hidden=false;$('frame-export-close').disabled=true;progress.hidden=false;progress.value=0;
+  let settings;
+  try{settings=readFrameExportSettings();}catch(error){status.textContent=`导出失败：${error.message}`;return;}
+  frameExportRunning=true;frameExportController=new AbortController();frameExportSupportRevision++;
+  button.disabled=true;cancel.hidden=false;cancel.disabled=false;$('frame-export-close').disabled=true;setFrameExportFieldsDisabled(true);progress.hidden=false;progress.value=0;
+  pause();
   try{
-    const result=await exportFrameZip({
+    const common={
       options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,
-      aspect:$('frame-aspect').value,start:Number($('frame-start').value),end:Number($('frame-end').value),fps:Number($('frame-fps').value),
-      isCancelled:()=>frameExportCancelled,
-      onProgress:(complete,total,time)=>{progress.value=complete/total*100;status.textContent=`正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}
-    });
-    if(!result){status.textContent='导出已取消。';return;}
-    const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=`signal-frames-${result.width}x${result.height}-${result.fps}fps.zip`;link.click();
+      aspect:settings.aspect,start:settings.start,end:settings.end,fps:settings.fps
+    };
+    let result,filename;
+    if(settings.format==='mp4'){
+      const {exportMp4Video}=await loadVideoExporter();
+      result=await exportMp4Video({...common,includeAudio:settings.includeAudio,signal:frameExportController.signal,onProgress:(percent,message)=>{progress.value=percent;status.textContent=`${Math.round(percent)}% · ${message}`;}});
+      filename=`signal-${result.width}x${result.height}-${result.fps}fps.mp4`;
+    }else{
+      result=await exportFrameZip({...common,isCancelled:()=>frameExportController.signal.aborted,onProgress:(complete,total,time)=>{const percent=complete/total*100;progress.value=percent;status.textContent=`${Math.round(percent)}% · 正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}});
+      filename=result&&`signal-frames-${result.width}x${result.height}-${result.fps}fps.zip`;
+    }
+    if(!result||frameExportController.signal.aborted){status.textContent='导出已取消。';return;}
+    const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=filename;link.click();
     setTimeout(()=>URL.revokeObjectURL(url),60000);
-    status.textContent=`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），ZIP 已开始下载。`;
-  }catch(error){status.textContent=`导出失败：${error.message}`;}
-  finally{frameExportRunning=false;button.disabled=false;$('frame-export-close').disabled=false;cancel.hidden=true;}
+    progress.value=100;
+    status.textContent=settings.format==='mp4'
+      ?`已生成 ${result.duration.toFixed(3)} 秒、${result.frameCount} 帧的 MP4（${result.width} × ${result.height}，${result.fps} FPS，${result.includeAudio?'含原版音轨':'无音轨'}），下载已开始。`
+      :`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），ZIP 下载已开始。`;
+  }catch(error){status.textContent=frameExportController.signal.aborted||error.name==='AbortError'?'导出已取消。':`导出失败：${error.message}`;}
+  finally{
+    frameExportRunning=false;frameExportController=null;setFrameExportFieldsDisabled(false);$('frame-export-close').disabled=false;cancel.hidden=true;cancel.disabled=false;
+    updateFrameExportFormat();button.disabled=false;
+  }
 }
 function updatePlayButton(){$('play-label').textContent=state.playing?'暂停':state.time>=APP_CONFIG.duration?'再播放':'播放';document.querySelector('.play-icon').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-label',state.playing?'暂停动画':'播放动画');}
 function pause(){state.playing=false;cancelAnimationFrame(raf);audio.pause();updatePlayButton();}
@@ -201,8 +260,10 @@ $('view-grid').onclick=()=>setView('grid');$('view-single').onclick=()=>setView(
 $('aspect-select').onchange=e=>setAspect(e.target.value);
 $('export-settings').onclick=downloadSettings;
 $('export-frames').onclick=openFrameExport;$('frame-export-start').onclick=()=>void runFrameExport();
-$('frame-export-cancel').onclick=()=>{$('frame-export-status').textContent='正在取消…';frameExportCancelled=true;};
-$('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();frameExportCancelled=true;$('frame-export-status').textContent='正在取消…';}});
+$('frame-export-cancel').onclick=()=>{if(!frameExportController)return;$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController.abort();};
+$('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController?.abort();}else frameExportSupportRevision++;});
+$('export-format').addEventListener('change',()=>void refreshFrameExportSupport());
+for(const id of ['frame-start','frame-end','frame-fps','frame-aspect','frame-audio'])$(id).addEventListener('change',scheduleFrameExportSupportCheck);
 $('import-settings').onclick=()=>{$('settings-file').value='';$('settings-file').click();};
 $('settings-file').onchange=async e=>{
   const file=e.target.files?.[0];if(!file)return;
@@ -225,9 +286,15 @@ document.addEventListener('keydown',e=>{
   if(e.code==='ArrowRight'||e.code==='ArrowLeft'){e.preventDefault();seek(clamp(state.time+(e.code==='ArrowRight'?1:-1)/30,0,APP_CONFIG.duration));}
 });
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();});
+window.addEventListener('pagehide',()=>frameExportController?.abort());
 audio.addEventListener('ended',()=>{if(state.playing&&state.sound){state.time=APP_CONFIG.duration;pause();draw();}});
 audio.addEventListener('error',()=>{if(state.sound){state.sound=false;timeStart=state.time;clockStart=performance.now();updateSoundButton();announce('音频加载失败，画面仍可预览。');}});
-window.ReplicaApp=Object.freeze({getState:snapshot,setOptions,setView,setAspect,setOptionSource,setDesign,importSettings:applyImport,exportSettings:()=>exportSettings(state),exportFrames:exportFrameZip,seek,play,pause});
+const videoExportOptions=config=>({options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,aspect:state.aspect,start:0,end:APP_CONFIG.duration,fps:30,includeAudio:true,...config});
+window.ReplicaApp=Object.freeze({
+  getState:snapshot,setOptions,setView,setAspect,setOptionSource,setDesign,importSettings:applyImport,exportSettings:()=>exportSettings(state),exportFrames:exportFrameZip,
+  checkVideoExport:config=>loadVideoExporter().then(module=>module.checkMp4ExportSupport(videoExportOptions(config))),
+  exportVideo:config=>loadVideoExporter().then(module=>module.exportMp4Video(videoExportOptions(config))),seek,play,pause
+});
 function registerTools(){
   const context=document.modelContext;if(!context?.registerTool)return;
   const lifecycle=new AbortController();window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});

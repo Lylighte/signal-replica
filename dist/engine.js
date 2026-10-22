@@ -339,4 +339,11 @@ export class SignalRenderer {
     if(t>MOTION.fadeStart){output.fillStyle=`rgba(0,0,0,${smooth((t-MOTION.fadeStart)/.12)})`;output.fillRect(0,0,WIDTH,HEIGHT);}
     this.curvatureSupported=design.screenCurve!=='curved'||this.screenCurve.apply(this.canvas,output,design.screenCurvature);
   }
+  dispose(){
+    this.screenCurve.dispose();
+    for(const canvas of [this.canvas,this.frame,this.compressed,this.softened,this.vignette,this.scanlines,this.noiseTexture,...this.glyphs.values(),...this.labels.values()]){
+      canvas.width=1;canvas.height=1;
+    }
+    this.glyphs.clear();this.labels.clear();
+  }
 }

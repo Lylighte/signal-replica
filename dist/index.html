@@ -35,7 +35,7 @@
           <div class="time"><span id="current-time">06.63</span><span class="time-divider">/</span><span id="total-time">17.51 s</span></div>
         </div>
         <label class="sr-only" for="timeline">动画时间，秒</label><input id="timeline" class="timeline" type="range" min="0" max="17.5" step="0.01" value="6.63">
-        <div class="transport-bottom"><span class="keyboard-hint"><kbd>Space</kbd> 播放 / 暂停</span><div class="preview-export-actions"><button id="export-frames" class="quiet-button">导出视频帧</button><button id="sound" class="quiet-button" aria-pressed="false">声音关闭</button></div></div>
+        <div class="transport-bottom"><span class="keyboard-hint"><kbd>Space</kbd> 播放 / 暂停</span><div class="preview-export-actions"><button id="export-frames" class="quiet-button">导出动画</button><button id="sound" class="quiet-button" aria-pressed="false">声音关闭</button></div></div>
       </div>
     </section>
     <aside class="editor" aria-label="内容编辑">
@@ -59,17 +59,19 @@
   </main>
   <dialog id="frame-export-dialog" class="frame-export-dialog" aria-labelledby="frame-export-title">
     <form method="dialog" class="frame-export-form">
-      <div class="design-heading"><h2 id="frame-export-title">导出视频帧</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>
-      <p class="design-intro">导出 PNG 帧序列 ZIP，单次最多 5000 帧。</p>
+      <div class="design-heading"><h2 id="frame-export-title">导出动画</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>
+      <p id="frame-export-intro" class="design-intro">在浏览器中生成 H.264 / AAC MP4，也可保留为 PNG 帧序列。</p>
       <div class="frame-export-grid">
-        <label>开始时间（秒）<input id="frame-start" type="number" min="0" max="17.507845804988662" step="0.01" value="0"></label>
-        <label>结束时间（秒）<input id="frame-end" type="number" min="0" max="17.507845804988662" step="0.1" value="17.5"></label>
-        <label>帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"></label>
+        <label class="frame-export-wide">导出格式<select id="export-format"><option value="mp4" selected>MP4 视频</option><option value="zip">PNG 帧序列 ZIP</option></select></label>
+        <label>开始时间（秒）<input id="frame-start" type="number" min="0" max="17.507845804988662" step="any" value="0"></label>
+        <label>结束时间（秒）<input id="frame-end" type="number" min="0" max="17.507845804988662" step="any" value="17.5"></label>
+        <label>帧率（FPS）<input id="frame-fps" type="number" min="1" max="120" step="1" value="30"><span class="frame-field-hint">MP4 仅支持 30 或 60 FPS</span></label>
         <label>画面比例<select id="frame-aspect"><option value="16:9">16:9 · 1920 × 1080</option><option value="4:3">4:3 · 1440 × 1080</option></select></label>
+        <label id="frame-audio-row" class="frame-audio-row frame-export-wide"><input id="frame-audio" type="checkbox" checked><span>包含原版音轨</span></label>
       </div>
       <progress id="frame-progress" class="frame-progress" max="100" value="0" hidden></progress>
       <p id="frame-export-status" class="form-status" aria-live="polite"></p>
-      <div class="frame-export-footer"><button id="frame-export-cancel" type="button" class="quiet-button" hidden>取消导出</button><button id="frame-export-start" type="button" class="play-button">生成 ZIP</button></div>
+      <div class="frame-export-footer"><button id="frame-export-cancel" type="button" class="quiet-button" hidden>取消导出</button><button id="frame-export-start" type="button" class="play-button">生成 MP4</button></div>
     </form>
   </dialog>
   <audio id="soundtrack" src="assets/audio.wav" preload="metadata"></audio>
