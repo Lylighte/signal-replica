@@ -1,24 +1,36 @@
 import {APP_CONFIG,PRESETS,resolveOptionSource,validateOption,validateOptions} from './config.js';
 import {SignalRenderer,getPhase,clamp} from './engine.js';
 import {DEFAULT_DESIGN,DESIGN_GROUPS,DESIGN_FIELDS,validateDesign,outsideSliderRange} from './design.js';
-import {ASPECTS,moveOption,exportSettings,importSettings,previewIssue} from './editor-data.js';
+import {ASPECTS,moveOption,previewIssue} from './editor-data.js';
 import {DESIGN_STORAGE_KEY} from './default-settings.js';
 import {exportFrameZip} from './frame-export.js';
+import {createDefaultProject,normalizeProject,parseProject,serializeProject} from './project-model.js';
+import {createProjectRenderState} from './project-runtime.js';
+import {assertProjectImageAssets} from './render-export.js';
+import {createManagedAudioAsset,getAudioPlaybackState} from './audio-project.js';
+import {LocalFontManager} from './font-manager.js';
 const $=id=>document.getElementById(id),initial=resolveOptionSource(APP_CONFIG.optionSource),OPTION_STORAGE_KEY='signal-custom-options-v1',defaultCustomOptions=resolveOptionSource({mode:'custom'});
 function loadDesign(){try{return validateDesign(JSON.parse(localStorage.getItem(DESIGN_STORAGE_KEY)??'{}'));}catch{return {...DEFAULT_DESIGN};}}
 function loadCustomOptions(){try{const saved=localStorage.getItem(OPTION_STORAGE_KEY);return saved?validateOptions(JSON.parse(saved)):structuredClone(defaultCustomOptions);}catch{return structuredClone(defaultCustomOptions);}}
 const customOptions=loadCustomOptions(),activeOptions=APP_CONFIG.optionSource.mode==='custom'?customOptions:initial;
-const state={options:activeOptions,source:{...APP_CONFIG.optionSource},design:loadDesign(),view:APP_CONFIG.preview.view,aspect:APP_CONFIG.preview.aspect,selectedId:activeOptions.some(option=>option.id===APP_CONFIG.preview.selectedId)?APP_CONFIG.preview.selectedId:activeOptions[0].id,time:APP_CONFIG.stillTime,playing:false,sound:false,ready:false};
+const initialSelected=activeOptions.some(option=>option.id===APP_CONFIG.preview.selectedId)?APP_CONFIG.preview.selectedId:activeOptions[0].id;
+const initialProject=createDefaultProject({options:activeOptions,design:loadDesign(),preview:{view:APP_CONFIG.preview.view,selectedId:initialSelected,aspect:APP_CONFIG.preview.aspect,framing:'crop'},layout:{mode:APP_CONFIG.preview.view==='single'?'focus':'grid',grid:'auto',aspect:APP_CONFIG.preview.aspect,framing:'crop',selectedId:initialSelected,order:activeOptions.map(option=>option.id),spacing:0}});
+const state={project:initialProject,options:initialProject.options,source:{...APP_CONFIG.optionSource},design:initialProject.design,view:initialProject.preview.view,aspect:initialProject.preview.aspect,framing:initialProject.preview.framing,selectedId:initialProject.preview.selectedId,time:Math.min(APP_CONFIG.stillTime,initialProject.timeline.duration),playing:false,sound:true,ready:false};
 let customDraft=structuredClone(customOptions),raf=0,clockStart=0,timeStart=0,nextId=1;
-const renderer=new SignalRenderer($('scene')),audio=$('soundtrack');
-$('timeline').max=APP_CONFIG.duration;$('total-time').textContent=`${APP_CONFIG.duration.toFixed(2)} s`;
-if(!previewIssue(state.design))renderer.setDesign(state.design);
+let renderer=null,renderedDesignSignature='',customAudioAsset=null;const layerImages=new Map(),fontManager=new LocalFontManager(),audio=$('soundtrack');
+const projectDuration=()=>state.project.timeline.duration;
+function emitProjectChange(){window.dispatchEvent(new CustomEvent('signal-project-change',{detail:{project:structuredClone(state.project)}}));}
+function rebuildPreviewRenderer(){
+  renderer?.dispose();renderedDesignSignature='';const {width,height}=ASPECTS[state.aspect];$('scene').width=width;$('scene').height=height;
+  renderer=new SignalRenderer($('scene'),{aspect:state.aspect,framing:state.framing});if(!previewIssue(state.design))renderer.setDesign(state.design);
+}
+rebuildPreviewRenderer();$('timeline').max=projectDuration();$('total-time').textContent=`${projectDuration().toFixed(2)} s`;
 const designControls=new Map();
 function reflectDesign(){for(const [key,{range,input,hint,field}]of designControls){if(range)range.value=state.design[key];input.value=state.design[key];if(hint)hint.hidden=!outsideSliderRange(field,state.design[key]);}}
 function setDesign(patch,reflect=true){
-  const next=validateDesign(patch,state.design);if(!previewIssue(next))renderer.setDesign(next);state.design=next;
+  const next=validateDesign(patch,state.design);if(!previewIssue(next))renderer.setDesign(next);state.design=next;state.project=normalizeProject({...state.project,design:next});
   try{localStorage.setItem(DESIGN_STORAGE_KEY,JSON.stringify(next));}catch{}
-  if(reflect)reflectDesign();draw();return snapshot();
+  if(reflect)reflectDesign();draw();emitProjectChange();return snapshot();
 }
 function renderDesignEditor(){
   $('design-groups').replaceChildren();designControls.clear();
@@ -63,15 +75,22 @@ $('reset-design').onclick=()=>{setDesign(DEFAULT_DESIGN);for(const {input,error}
 function announce(message){$('form-status').textContent=message;}
 function phaseLabel(){
   const active=state.view==='single'?state.options.filter(option=>option.id===state.selectedId):state.options;
-  return getPhase(state.time,state.design,Math.max(...active.map(option=>option.value.length)));
+  const frame=createProjectRenderState(state.project,state.time,{images:layerImages});
+  return getPhase(frame.signalTime,frame.design,Math.max(...active.map(option=>option.value.length)));
 }
 function draw(){
   if(!state.ready)return;
   const issue=previewIssue(state.design);$('preview-status').textContent=issue;$('preview-status').hidden=!issue;
-  if(!issue)renderer.render(state.time,state.options,state.view,state.selectedId);
+  if(!issue){
+    const frame=createProjectRenderState(state.project,state.time,{images:layerImages}),effective={...frame.design};
+    if(frame.project.typography.number.size!=null)effective.numberSize=frame.project.typography.number.size;if(frame.project.typography.number.weight!=null)effective.numberWeight=frame.project.typography.number.weight;
+    if(frame.project.typography.text.size!=null)effective.labelSize=frame.project.typography.text.size;if(frame.project.typography.text.weight!=null)effective.labelWeight=frame.project.typography.text.weight;
+    const designSignature=JSON.stringify(effective);if(designSignature!==renderedDesignSignature){renderer.setDesign(effective);renderedDesignSignature=designSignature;}renderer.render(frame.signalTime,frame.options,frame.view,frame.selectedId,frame.scene);
+    const diagnostics=[...frame.layout.diagnostics.map(item=>item.message),...frame.assetIssues].join(' ');if(diagnostics){$('preview-status').textContent=diagnostics;$('preview-status').hidden=false;}
+  }
   $('curve-status').hidden=renderer.curvatureSupported;
   $('current-time').textContent=state.time.toFixed(2).padStart(5,'0');$('timeline').value=state.time;
-  const progress=state.time/APP_CONFIG.duration*100;
+  const progress=state.time/projectDuration()*100;
   $('timeline').style.background=`linear-gradient(to right,var(--accent) 0% ${progress}%,#35373b ${progress}% 100%)`;
   $('timeline').setAttribute('aria-valuetext',`${state.time.toFixed(2)} 秒，${phaseLabel()}`);
 }
@@ -86,7 +105,7 @@ function renderEditor(){
   state.options.forEach((option,index)=>{
     const row=document.createElement('div');row.className='option-row';
     const number=document.createElement('span');number.className='row-index';number.textContent=String(index+1).padStart(2,'0');
-    const label=document.createElement('input');label.value=option.label;label.setAttribute('aria-label',`选项 ${index+1} 名称`);label.maxLength=24;label.readOnly=locked;label.autocomplete='off';label.spellcheck=false;
+    const label=document.createElement('input');label.value=option.label;label.setAttribute('aria-label',`选项 ${index+1} 名称`);label.maxLength=APP_CONFIG.maxLabelLength;label.readOnly=locked;label.autocomplete='off';label.spellcheck=false;
     const value=document.createElement('input');value.value=option.value;value.className='number-input';value.inputMode='numeric';value.maxLength=4;value.setAttribute('aria-label',`选项 ${index+1} 数字`);value.readOnly=locked;value.autocomplete='off';
     const remove=document.createElement('button');remove.textContent='×';remove.className='remove-option';remove.setAttribute('aria-label',`删除选项 ${index+1}`);remove.disabled=state.options.length===1;remove.hidden=locked;
     const error=document.createElement('p');error.className='field-error';error.hidden=true;error.id=`error-${index}`;
@@ -94,7 +113,7 @@ function renderEditor(){
       input.setAttribute('aria-describedby',error.id);
       input.addEventListener('input',()=>{
         if(locked)return;
-        try{state.options[index]=validateOption({...option,label:label.value,value:value.value});customDraft=structuredClone(state.options);saveCustomOptions(customDraft);error.hidden=true;label.removeAttribute('aria-invalid');value.removeAttribute('aria-invalid');draw();updateSelect();announce('');}
+        try{state.options[index]=validateOption({...option,label:label.value,value:value.value});state.project=normalizeProject({...state.project,options:state.options});customDraft=structuredClone(state.options);saveCustomOptions(customDraft);error.hidden=true;label.removeAttribute('aria-invalid');value.removeAttribute('aria-invalid');draw();updateSelect();emitProjectChange();announce('');}
         catch(e){error.textContent=e.message;error.hidden=false;input.setAttribute('aria-invalid','true');}
       });
       input.addEventListener('blur',()=>{if(!error.hidden)return;label.value=state.options[index].label;value.value=state.options[index].value;});
@@ -115,7 +134,9 @@ function renderEditor(){
 function replaceOptions(options){
   const validated=validateOptions(options);state.options=validated;
   if(!state.options.some(o=>o.id===state.selectedId))state.selectedId=state.options[0].id;
-  if(state.source.mode==='custom'){customDraft=structuredClone(validated);saveCustomOptions(customDraft);}renderEditor();draw();
+  const optionIds=new Set(validated.map(option=>option.id)),keyframes=state.project.timeline.keyframes.filter(frame=>{const match=/^options\.([^.]+)\./.exec(frame.path);return !match||optionIds.has(match[1]);});
+  state.project=normalizeProject({...state.project,options:validated,preview:{...state.project.preview,selectedId:state.selectedId},layout:{...state.project.layout,selectedId:state.selectedId,order:validated.map(option=>option.id)},timeline:{...state.project.timeline,keyframes}});
+  if(state.source.mode==='custom'){customDraft=structuredClone(validated);saveCustomOptions(customDraft);}renderEditor();draw();emitProjectChange();
 }
 function saveCustomOptions(options){try{localStorage.setItem(OPTION_STORAGE_KEY,JSON.stringify(options));}catch{}}
 function setOptionSource(source){
@@ -125,84 +146,192 @@ function setOptionSource(source){
 }
 function setOptions(options){if(state.source.mode!=='custom')throw new Error('预设模式下不能修改选项，请更换预设。');replaceOptions(options);return snapshot();}
 function setView(view,selectedId=state.selectedId){
-  if(!['grid','single'].includes(view))throw new Error('画面布局无效。');
+  if(!['grid','single','focus','carousel','paged'].includes(view))throw new Error('画面布局无效。');
   if(!state.options.some(o=>o.id===selectedId))throw new Error('显示选项不存在。');
-  state.view=view;state.selectedId=selectedId;$('view-grid').setAttribute('aria-pressed',String(view==='grid'));$('view-single').setAttribute('aria-pressed',String(view==='single'));$('single-select-wrap').hidden=view!=='single';updateSelect();draw();return snapshot();
+  state.view=view;state.selectedId=selectedId;const mode=view==='single'?'focus':view;
+  state.project=normalizeProject({...state.project,preview:{...state.project.preview,view,selectedId},layout:{...state.project.layout,mode,selectedId}});
+  $('view-grid').setAttribute('aria-pressed',String(view==='grid'));$('view-single').setAttribute('aria-pressed',String(view==='single'||view==='focus'));$('single-select-wrap').hidden=!['single','focus'].includes(view);updateSelect();draw();emitProjectChange();return snapshot();
 }
-function setAspect(aspect){
+function setAspect(aspect,framing=state.framing){
   if(!Object.hasOwn(ASPECTS,aspect))throw new Error('画面比例无效。');
-  state.aspect=aspect;$('stage').dataset.aspect=aspect;$('aspect-select').value=aspect;
+  if(!['crop','fit','reflow'].includes(framing))throw new Error('画幅适配方式无效。');
+  state.aspect=aspect;state.framing=framing;state.project=normalizeProject({...state.project,preview:{...state.project.preview,aspect,framing},layout:{...state.project.layout,aspect,framing}});$('stage').dataset.aspect=aspect;$('aspect-select').value=aspect;
   const {width,height}=ASPECTS[aspect];$('resolution').textContent=`${width} × ${height}`;
-  $('aspect-note').hidden=aspect!=='4:3';return snapshot();
+  $('aspect-note').textContent=`${aspect} · ${framing==='crop'?'居中裁剪':framing==='fit'?'自适应缩放':'智能重排'} · ${width} × ${height}`;$('aspect-note').hidden=aspect==='16:9'&&framing==='crop';rebuildPreviewRenderer();draw();emitProjectChange();return snapshot();
+}
+function applyProject(input,message='项目已更新。'){
+  const next=normalizeProject(input,{fallback:state.project});pause();
+  if(next.audio.source==='custom'&&customAudioAsset&&next.audio.name&&next.audio.name!==customAudioAsset.metadata.name){void customAudioAsset.dispose();customAudioAsset=null;}
+  state.project=next;state.options=next.options;state.design=next.design;state.view=next.preview.view;state.aspect=next.preview.aspect;state.framing=next.preview.framing;state.selectedId=next.preview.selectedId;state.time=Math.min(state.time,next.timeline.duration);
+  if(state.source.mode==='custom'){customDraft=structuredClone(next.options);saveCustomOptions(customDraft);}
+  try{localStorage.setItem(DESIGN_STORAGE_KEY,JSON.stringify(next.design));}catch{}
+  $('timeline').max=next.timeline.duration;$('total-time').textContent=`${next.timeline.duration.toFixed(2)} s`;
+  for(const id of ['frame-start','frame-end'])if($(id))$(id).max=next.timeline.duration;
+  reflectDesign();renderEditor();rebuildPreviewRenderer();$('stage').dataset.aspect=state.aspect;$('aspect-select').value=state.aspect;
+  const {width,height}=ASPECTS[state.aspect];$('resolution').textContent=`${width} × ${height}`;
+  $('view-grid').setAttribute('aria-pressed',String(state.view==='grid'));$('view-single').setAttribute('aria-pressed',String(['single','focus'].includes(state.view)));$('single-select-wrap').hidden=!['single','focus'].includes(state.view);
+  syncProjectAudioElement();draw();updatePlayButton();emitProjectChange();announce(message);return snapshot();
 }
 function applyImport(text){
   if(state.source.mode!=='custom')throw new Error('预设模式下不能导入。');
-  const imported=importSettings(text,state); // Fully validate before changing live state.
-  pause();setDesign(imported.design);state.selectedId=imported.selectedId;
-  replaceOptions(imported.options);setView(imported.view,imported.selectedId);setAspect(imported.aspect);
-  announce('已导入选项、画面参数和预览设置。');return snapshot();
+  const imported=parseProject(text,{fallback:state.project}); // Fully validate before changing live state.
+  return applyProject(imported,'已导入完整 SIGNAL Studio 项目。');
 }
 function downloadSettings(){
-  const text=exportSettings(state),url=URL.createObjectURL(new Blob([text],{type:'application/json'})),link=document.createElement('a');
-  link.href=url;link.download='signal-settings.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  announce('已导出选项顺序、数字、画面参数和预览设置。');
+  const text=serializeProject(state.project),url=URL.createObjectURL(new Blob([text],{type:'application/json'})),link=document.createElement('a');
+  link.href=url;link.download='signal-studio-project.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  announce('已导出完整项目配置；本地音频、字体和图片文件内容不会写入 JSON。');
 }
-let frameExportRunning=false,frameExportCancelled=false;
+let frameExportRunning=false,frameExportController=null,frameExportSupportRevision=0,videoExporterPromise=null,frameExportCheckTimer=0;
+const frameExportFieldIds=['export-format','frame-start','frame-end','frame-quality','frame-aspect','frame-framing','frame-fps','frame-zip-fps','frame-quality-preset','frame-bitrate','frame-audio','frame-audio-source'];
+const loadVideoExporter=()=>videoExporterPromise??=import('./video-export.js');
+function readFrameExportSettings(){
+  const number=(id,label)=>{const value=$(id).value.trim();if(value==='')throw new Error(`请输入${label}。`);return Number(value);};
+  const format=$('export-format').value;if(!['mp4','zip'].includes(format))throw new Error('导出格式无效。');
+  const audioSource=$('frame-audio-source')?.value??(state.project.audio.source==='none'?'none':state.project.audio.source);
+  const settings={
+    format,start:number('frame-start','开始时间'),end:number('frame-end','结束时间'),
+    fps:number(format==='mp4'?'frame-fps':'frame-zip-fps','帧率'),quality:$('frame-quality').value,
+    aspect:$('frame-aspect').value,framing:$('frame-framing')?.value??state.framing,
+    qualityPreset:$('frame-quality-preset')?.value??'balanced',videoBitrate:($('frame-quality-preset')?.value==='custom'?number('frame-bitrate','自定义码率')*1_000_000:undefined),
+    audioSource,includeAudio:$('frame-audio').checked&&audioSource!=='none'
+  };
+  if(settings.format==='mp4'&&settings.includeAudio&&settings.audioSource==='custom'&&!customAudioAsset)throw new Error('请先在“音频”面板导入自定义音轨。');
+  return settings;
+}
+function setFrameExportFieldsDisabled(disabled){for(const id of frameExportFieldIds)if($(id))$(id).disabled=disabled;}
+function updateFrameExportFormat(){
+  const mp4=$('export-format').value==='mp4',customBitrate=mp4&&$('frame-quality-preset').value==='custom';
+  $('frame-audio-row').hidden=!mp4;
+  $('frame-audio-source-row').hidden=!mp4;$('frame-quality-preset-row').hidden=!mp4;$('frame-bitrate-row').hidden=!customBitrate;
+  $('frame-mp4-fps-row').hidden=!mp4;$('frame-zip-fps-row').hidden=mp4;
+  $('frame-export-intro').textContent=mp4?'逐帧渲染并在浏览器中生成 H.264 / AAC MP4。':'逐帧渲染无损 PNG，并打包为 ZIP。';
+  $('frame-export-start').textContent=mp4?'生成 MP4':'生成 ZIP';
+  if(!mp4){$('frame-load-warning').textContent='';$('frame-load-warning').hidden=true;}
+}
+async function refreshFrameExportSupport(){
+  clearTimeout(frameExportCheckTimer);
+  if(frameExportRunning)return;
+  const revision=++frameExportSupportRevision,status=$('frame-export-status'),button=$('frame-export-start');
+  updateFrameExportFormat();
+  try{assertProjectImageAssets(state.project,{images:layerImages});}
+  catch(error){status.textContent=`当前项目无法导出：${error.message}`;$('frame-load-warning').hidden=true;button.disabled=true;return;}
+  if($('export-format').value==='zip'){status.textContent='PNG ZIP 支持 1080p / 2K / 4K、1–165 FPS；帧序列会包含结束时刻画面。';button.disabled=false;return;}
+  button.disabled=true;status.textContent='正在检查本机 H.264 / AAC 编码兼容性…';
+  try{
+    const settings=readFrameExportSettings(),{checkMp4ExportSupport}=await loadVideoExporter();
+    await checkMp4ExportSupport({...settings,duration:projectDuration(),audioBuffer:settings.audioSource==='custom'?customAudioAsset?.audioBuffer:null});
+    if(revision!==frameExportSupportRevision||frameExportRunning||!$('frame-export-dialog').open)return;
+    const plan=await import('./export-plan.js').then(module=>module.createMp4ExportPlan({...settings,duration:projectDuration()}));
+    status.textContent=`当前配置可用：H.264 ${settings.fps} FPS · ${(plan.bitrate/1_000_000).toFixed(1)} Mbps${settings.includeAudio&&settings.audioSource!=='none'?' + AAC':'（无音轨）'}。${plan.load.warning?` ${plan.load.warning}`:''}`;
+    $('frame-load-warning').textContent=plan.load.warning;$('frame-load-warning').hidden=!plan.load.warning;
+    button.disabled=false;
+  }catch(error){
+    if(revision!==frameExportSupportRevision||frameExportRunning||!$('frame-export-dialog').open)return;
+    status.textContent=`当前设置无法导出 MP4：${error.message}`;$('frame-load-warning').hidden=true;button.disabled=true;
+  }
+}
+function scheduleFrameExportSupportCheck(){
+  clearTimeout(frameExportCheckTimer);
+  frameExportCheckTimer=setTimeout(()=>void refreshFrameExportSupport(),150);
+}
 function openFrameExport(){
-  $('frame-start').value='0';$('frame-end').value=(Math.floor(APP_CONFIG.duration*10)/10).toFixed(1);$('frame-aspect').value=state.aspect;
+  $('export-format').value='mp4';$('frame-start').value='0';$('frame-end').value=String(projectDuration());$('frame-quality').value=state.project.export.quality;$('frame-fps').value=String(state.project.export.fps);$('frame-zip-fps').value='30';$('frame-aspect').value=state.aspect;if($('frame-framing'))$('frame-framing').value=state.framing;if($('frame-quality-preset'))$('frame-quality-preset').value=state.project.export.bitrateMode==='custom'?'custom':state.project.export.qualityPreset;if($('frame-bitrate'))$('frame-bitrate').value=String((state.project.export.videoBitrate??12_000_000)/1_000_000);if($('frame-audio-source'))$('frame-audio-source').value=state.project.audio.source;$('frame-audio').checked=state.project.export.includeAudio;
   $('frame-progress').hidden=true;$('frame-progress').value=0;$('frame-export-cancel').hidden=true;
-  $('frame-export-start').disabled=false;$('frame-export-status').textContent='';
+  $('frame-export-start').disabled=true;$('frame-export-status').textContent='';
   $('frame-export-close').disabled=false;
+  setFrameExportFieldsDisabled(false);updateFrameExportFormat();
   $('frame-export-dialog').showModal();
+  void refreshFrameExportSupport();
 }
 async function runFrameExport(){
   if(frameExportRunning)return;
-  frameExportRunning=true;frameExportCancelled=false;
   const button=$('frame-export-start'),cancel=$('frame-export-cancel'),progress=$('frame-progress'),status=$('frame-export-status');
-  button.disabled=true;cancel.hidden=false;$('frame-export-close').disabled=true;progress.hidden=false;progress.value=0;
+  let settings;
+  try{settings=readFrameExportSettings();}catch(error){status.textContent=`导出失败：${error.message}`;return;}
+  frameExportRunning=true;frameExportController=new AbortController();frameExportSupportRevision++;
+  button.disabled=true;cancel.hidden=false;cancel.disabled=false;$('frame-export-close').disabled=true;setFrameExportFieldsDisabled(true);progress.hidden=false;progress.value=0;
+  pause();
   try{
-    const result=await exportFrameZip({
+    const common={
       options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,
-      aspect:$('frame-aspect').value,start:Number($('frame-start').value),end:Number($('frame-end').value),fps:Number($('frame-fps').value),
-      isCancelled:()=>frameExportCancelled,
-      onProgress:(complete,total,time)=>{progress.value=complete/total*100;status.textContent=`正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}
-    });
-    if(!result){status.textContent='导出已取消。';return;}
-    const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=`signal-frames-${result.width}x${result.height}-${result.fps}fps.zip`;link.click();
+      aspect:settings.aspect,quality:settings.quality,framing:settings.framing,start:settings.start,end:settings.end,fps:settings.fps,duration:projectDuration(),
+      project:structuredClone(state.project),runtimeAssets:{images:layerImages}
+    };
+    let result,filename;
+    if(settings.format==='mp4'){
+      const {exportMp4Video}=await loadVideoExporter();
+      result=await exportMp4Video({...common,qualityPreset:settings.qualityPreset,videoBitrate:settings.videoBitrate,includeAudio:settings.includeAudio,audioSource:settings.audioSource,audioBuffer:settings.audioSource==='custom'?customAudioAsset?.audioBuffer:null,audioSettings:state.project.audio,signal:frameExportController.signal,onProgress:(percent,message)=>{progress.value=percent;status.textContent=`${Math.round(percent)}% · ${message}`;}});
+      filename=`signal-${result.width}x${result.height}-${result.fps}fps.mp4`;
+    }else{
+      result=await exportFrameZip({...common,signal:frameExportController.signal,isCancelled:()=>frameExportController.signal.aborted,onProgress:(complete,total,time)=>{const percent=complete/total*100;progress.value=percent;status.textContent=`${Math.round(percent)}% · 正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}});
+      filename=result&&`signal-frames-${result.width}x${result.height}-${result.fps}fps.zip`;
+    }
+    if(!result||frameExportController.signal.aborted){status.textContent='导出已取消。';return;}
+    const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=filename;link.click();
     setTimeout(()=>URL.revokeObjectURL(url),60000);
-    status.textContent=`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），ZIP 已开始下载。`;
-  }catch(error){status.textContent=`导出失败：${error.message}`;}
-  finally{frameExportRunning=false;button.disabled=false;$('frame-export-close').disabled=false;cancel.hidden=true;}
+    progress.value=100;
+    status.textContent=settings.format==='mp4'
+      ?`已生成 ${result.duration.toFixed(3)} 秒、${result.frameCount} 帧的 MP4（${result.width} × ${result.height}，${result.fps} FPS，${result.includeAudio?`含${result.audioSource==='custom'?'自定义':'原版'}音轨`:'无音轨'}），下载已开始。`
+      :`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），ZIP 下载已开始。`;
+  }catch(error){status.textContent=frameExportController.signal.aborted||error.name==='AbortError'?'导出已取消。':`导出失败：${error.message}`;}
+  finally{
+    frameExportRunning=false;frameExportController=null;setFrameExportFieldsDisabled(false);$('frame-export-close').disabled=false;cancel.hidden=true;cancel.disabled=false;
+    updateFrameExportFormat();button.disabled=false;
+  }
 }
-function updatePlayButton(){$('play-label').textContent=state.playing?'暂停':state.time>=APP_CONFIG.duration?'再播放':'播放';document.querySelector('.play-icon').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-label',state.playing?'暂停动画':'播放动画');}
+function updatePlayButton(){$('play-label').textContent=state.playing?'暂停':state.time>=projectDuration()?'再播放':'播放';document.querySelector('.play-icon').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-label',state.playing?'暂停动画':'播放动画');}
 function pause(){state.playing=false;cancelAnimationFrame(raf);audio.pause();updatePlayButton();}
 function seek(time){
-  if(typeof time!=='number'||!Number.isFinite(time)||time<0||time>APP_CONFIG.duration)throw new Error(`时间需在 0–${APP_CONFIG.duration} 秒之间。`);
-  pause();state.time=time;audio.currentTime=time;draw();updatePlayButton();return snapshot();
+  if(typeof time!=='number'||!Number.isFinite(time)||time<0||time>projectDuration())throw new Error(`时间需在 0–${projectDuration()} 秒之间。`);
+  pause();state.time=time;syncAudioToProjectTime(time,false);draw();updatePlayButton();return snapshot();
+}
+function previewAudioState(time){
+  const settings=state.project.audio;if(settings.source==='none'||settings.muted||settings.volume===0)return{active:false,sourceTime:null,gain:0};
+  if(settings.source==='custom')return customAudioAsset?getAudioPlaybackState(customAudioAsset.audioBuffer,time,settings,{projectDuration:projectDuration()}):{active:false,sourceTime:null,gain:0};
+  const sourceDuration=Number.isFinite(audio.duration)?audio.duration:APP_CONFIG.duration,trimEnd=Math.min(settings.trimEnd??sourceDuration,sourceDuration),clipDuration=Math.max(0,trimEnd-settings.trimStart),start=settings.timelineStart??0,end=settings.timelineEnd??(settings.loop?projectDuration():start+clipDuration);
+  if(time<start||time>=end||clipDuration<=0)return{active:false,sourceTime:null,gain:0};
+  const local=time-start;if(!settings.loop&&local>=clipDuration)return{active:false,sourceTime:null,gain:0};
+  let gain=settings.volume,sourceTime=settings.trimStart+(settings.loop?local%clipDuration:local);
+  if(settings.fadeIn>0)gain*=Math.min(1,local/settings.fadeIn);if(settings.fadeOut>0)gain*=Math.min(1,Math.max(0,end-time)/settings.fadeOut);
+  return{active:true,sourceTime,gain};
+}
+function syncAudioToProjectTime(time,shouldPlay=state.playing&&state.sound){
+  const mapped=previewAudioState(time);audio.volume=clamp(mapped.gain,0,1);
+  if(!mapped.active){audio.pause();return;}
+  if(Math.abs(audio.currentTime-mapped.sourceTime)>.06)audio.currentTime=mapped.sourceTime;
+  if(shouldPlay&&audio.paused)void audio.play().catch(()=>{state.sound=false;updateSoundButton();announce('当前音轨无法播放，画面仍可预览。');});
+}
+function syncProjectAudioElement(){
+  const source=state.project.audio.source,desired=source==='original'?'assets/audio.wav':source==='custom'?customAudioAsset?.objectUrl??null:null,current=audio.getAttribute('src');
+  if(current===desired)return;
+  if(desired)audio.src=desired;else audio.removeAttribute('src');audio.load();
 }
 function frame(now){
   if(!state.playing)return;
-  state.time=clamp(state.sound&&!audio.paused&&!audio.seeking?audio.currentTime:timeStart+(now-clockStart)/1000,0,APP_CONFIG.duration);draw();
-  if(state.time>=APP_CONFIG.duration){pause();return;}raf=requestAnimationFrame(frame);
+  state.time=clamp(timeStart+(now-clockStart)/1000,0,projectDuration());if(state.sound)syncAudioToProjectTime(state.time,true);draw();
+  if(state.time>=projectDuration()){pause();return;}raf=requestAnimationFrame(frame);
 }
 async function play(){
-  if(!state.ready||state.playing)return;if(state.time>=APP_CONFIG.duration)state.time=0;
+  if(!state.ready||state.playing)return;if(state.time>=projectDuration())state.time=0;
   timeStart=state.time;clockStart=performance.now();state.playing=true;
-  if(state.sound){audio.currentTime=state.time;try{await audio.play();}catch{state.sound=false;updateSoundButton();announce('音频暂时无法播放，画面仍可预览。');}}
+  if(state.sound){syncAudioToProjectTime(state.time,false);try{if(previewAudioState(state.time).active)await audio.play();}catch{state.sound=false;updateSoundButton();announce('音频暂时无法播放，画面仍可预览。');}}
   if(!state.playing)return;updatePlayButton();cancelAnimationFrame(raf);raf=requestAnimationFrame(frame);
 }
 function updateSoundButton(){$('sound').textContent=state.sound?'声音开启':'声音关闭';$('sound').setAttribute('aria-pressed',String(state.sound));}
 async function toggleSound(){
   state.sound=!state.sound;timeStart=state.time;clockStart=performance.now();
-  if(!state.sound)audio.pause();else if(state.playing){audio.currentTime=state.time;try{await audio.play();}catch{state.sound=false;announce('音频暂时无法播放。');}}updateSoundButton();
+  if(!state.sound)audio.pause();else if(state.playing){syncAudioToProjectTime(state.time,false);try{if(previewAudioState(state.time).active)await audio.play();}catch{state.sound=false;announce('音频暂时无法播放。');}}updateSoundButton();
 }
-function snapshot(){return structuredClone({options:state.options,optionSource:state.source,design:state.design,view:state.view,aspect:state.aspect,selectedId:state.selectedId,time:state.time,phase:phaseLabel(),playing:state.playing,sound:state.sound,ready:state.ready});}
+function snapshot(){return structuredClone({project:state.project,options:state.options,optionSource:state.source,design:state.design,view:state.view,aspect:state.aspect,framing:state.framing,selectedId:state.selectedId,time:state.time,phase:phaseLabel(),playing:state.playing,sound:state.sound,ready:state.ready});}
 $('view-grid').onclick=()=>setView('grid');$('view-single').onclick=()=>setView('single');$('selected-option').onchange=e=>setView('single',e.target.value);
 $('aspect-select').onchange=e=>setAspect(e.target.value);
 $('export-settings').onclick=downloadSettings;
 $('export-frames').onclick=openFrameExport;$('frame-export-start').onclick=()=>void runFrameExport();
-$('frame-export-cancel').onclick=()=>{$('frame-export-status').textContent='正在取消…';frameExportCancelled=true;};
-$('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();frameExportCancelled=true;$('frame-export-status').textContent='正在取消…';}});
+$('frame-export-cancel').onclick=()=>{if(!frameExportController)return;$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController.abort();};
+$('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController?.abort();}else frameExportSupportRevision++;});
+$('export-format').addEventListener('change',()=>void refreshFrameExportSupport());
+for(const id of ['frame-start','frame-end','frame-quality','frame-fps','frame-zip-fps','frame-aspect','frame-framing','frame-quality-preset','frame-bitrate','frame-audio','frame-audio-source'])$(id)?.addEventListener('change',scheduleFrameExportSupportCheck);
 $('import-settings').onclick=()=>{$('settings-file').value='';$('settings-file').click();};
 $('settings-file').onchange=async e=>{
   const file=e.target.files?.[0];if(!file)return;
@@ -222,22 +351,62 @@ document.addEventListener('fullscreenchange',()=>{$('exit-fullscreen').hidden=!d
 document.addEventListener('keydown',e=>{
   if(e.target.closest('input,select,textarea,button,[contenteditable="true"]')||e.ctrlKey||e.metaKey||e.altKey)return;
   if(e.code==='Space'){e.preventDefault();state.playing?pause():void play();}
-  if(e.code==='ArrowRight'||e.code==='ArrowLeft'){e.preventDefault();seek(clamp(state.time+(e.code==='ArrowRight'?1:-1)/30,0,APP_CONFIG.duration));}
+  if(e.code==='ArrowRight'||e.code==='ArrowLeft'){e.preventDefault();seek(clamp(state.time+(e.code==='ArrowRight'?1:-1)/30,0,projectDuration()));}
 });
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();});
-audio.addEventListener('ended',()=>{if(state.playing&&state.sound){state.time=APP_CONFIG.duration;pause();draw();}});
+window.addEventListener('pagehide',()=>{frameExportController?.abort();void customAudioAsset?.dispose();fontManager.disposeAll();for(const url of layerImageUrls.values())URL.revokeObjectURL(url);renderer?.dispose();},{once:true});
+audio.addEventListener('ended',()=>{if(state.playing&&state.sound)syncAudioToProjectTime(state.time,true);});
 audio.addEventListener('error',()=>{if(state.sound){state.sound=false;timeStart=state.time;clockStart=performance.now();updateSoundButton();announce('音频加载失败，画面仍可预览。');}});
-window.ReplicaApp=Object.freeze({getState:snapshot,setOptions,setView,setAspect,setOptionSource,setDesign,importSettings:applyImport,exportSettings:()=>exportSettings(state),exportFrames:exportFrameZip,seek,play,pause});
+function updateProject(patch,message='项目设置已更新。'){
+  if(!patch||typeof patch!=='object'||Array.isArray(patch))throw new Error('项目更新格式无效。');
+  const merged={...state.project,...patch};
+  for(const key of ['meta','preview','layout','timeline','audio','beat','theme','typography','export','batch'])if(patch[key])merged[key]={...state.project[key],...patch[key]};
+  if(patch.timeline?.stages)merged.timeline.stages={...state.project.timeline.stages,...patch.timeline.stages};
+  if(patch.theme?.colors)merged.theme.colors={...state.project.theme.colors,...patch.theme.colors};
+  if(patch.typography?.number)merged.typography.number={...state.project.typography.number,...patch.typography.number};
+  if(patch.typography?.text)merged.typography.text={...state.project.typography.text,...patch.typography.text};
+  return applyProject(merged,message);
+}
+async function setCustomAudioFile(file){
+  const next=await createManagedAudioAsset(file);await customAudioAsset?.dispose();customAudioAsset=next;audio.src=next.objectUrl;
+  updateProject({audio:{source:'custom',name:next.metadata.name,mimeType:next.metadata.type,assetId:'local-custom-audio',trimStart:0,trimEnd:next.duration,timelineStart:0,timelineEnd:null}},`已载入自定义音轨“${next.metadata.name}”。`);return{metadata:next.metadata,duration:next.duration};
+}
+function setAudioSource(source){
+  if(!['original','custom','none'].includes(source))throw new Error('音轨来源无效。');
+  if(source==='custom'&&!customAudioAsset)throw new Error('请先选择自定义音频文件。');
+  pause();return updateProject({audio:{source}},source==='none'?'已关闭项目音轨。':source==='original'?'已切换为原版音轨。':'已切换为自定义音轨。');
+}
+async function loadProjectFont(file,target='text'){
+  if(!['number','text'].includes(target))throw new Error('字体用途无效。');
+  const metadata=await fontManager.load(file),fonts=[...state.project.typography.fonts.filter(font=>font.id!==metadata.id),metadata];
+  updateProject({typography:{fonts,[target]:{...state.project.typography[target],family:metadata.family}}},`已为${target==='number'?'数字':'文字'}载入字体“${metadata.family}”。`);return metadata;
+}
+const layerImageUrls=new Map();
+async function setLayerImageFile(layerId,file){
+  const extension=String(file?.name??'').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if(!file||(!/^image\/(?:png|jpeg|webp|svg\+xml)$/i.test(file.type)&&!['png','jpg','jpeg','webp','svg'].includes(extension)))throw new Error('图片图层仅支持 PNG、JPEG、WebP 或 SVG。');
+  const url=URL.createObjectURL(file),image=new Image();image.decoding='async';
+  try{await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('图片无法解码。'));image.src=url;});}
+  catch(error){URL.revokeObjectURL(url);throw error;}
+  const previous=layerImageUrls.get(layerId);if(previous)URL.revokeObjectURL(previous);layerImageUrls.set(layerId,url);layerImages.set(layerId,image);draw();return{name:file.name,width:image.naturalWidth,height:image.naturalHeight};
+}
+function releaseLayerImage(layerId){const url=layerImageUrls.get(layerId);if(url)URL.revokeObjectURL(url);layerImageUrls.delete(layerId);return layerImages.delete(layerId);}
+const videoExportOptions=config=>({options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,aspect:state.aspect,framing:state.framing,quality:'1080p',start:0,end:projectDuration(),duration:projectDuration(),fps:30,includeAudio:true,project:structuredClone(state.project),runtimeAssets:{images:layerImages},audioSource:state.project.audio.source,audioBuffer:customAudioAsset?.audioBuffer,audioSettings:state.project.audio,...config});
+window.ReplicaApp=Object.freeze({
+  getState:snapshot,getProject:()=>structuredClone(state.project),getCustomAudioBuffer:()=>customAudioAsset?.audioBuffer??null,setProject:project=>applyProject(project),updateProject,setCustomAudioFile,setAudioSource,loadProjectFont,setLayerImageFile,releaseLayerImage,setOptions,setView,setAspect,setOptionSource,setDesign,importSettings:applyImport,exportSettings:()=>serializeProject(state.project),exportFrames:config=>exportFrameZip(videoExportOptions(config)),
+  checkVideoExport:config=>loadVideoExporter().then(module=>module.checkMp4ExportSupport(videoExportOptions(config))),
+  exportVideo:config=>loadVideoExporter().then(module=>module.exportMp4Video(videoExportOptions(config))),seek,play,pause
+});
 function registerTools(){
   const context=document.modelContext;if(!context?.registerTool)return;
   const lifecycle=new AbortController();window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});
   const tools=[
     {name:'configure_signal_design',title:'调整画面参数',description:'Update editor settings. Numeric input may exceed slider bounds; the editor shows a hint and preserves the entered value.',inputSchema:{type:'object',properties:Object.fromEntries(DESIGN_FIELDS.map(field=>[field.key,field.options?{type:'string',enum:field.options.map(option=>option.value)}:{type:field.step>=1?'integer':'number'}])),additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:input=>setDesign(input)},
-    {name:'set_signal_preview',title:'调整演出预览',description:'Change preview layout and aspect ratio without changing animation.',inputSchema:{type:'object',properties:{aspect:{type:'string',enum:['16:9','4:3']},view:{type:'string',enum:['grid','single']},selectedId:{type:'string'}},additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:input=>{if(input.view||input.selectedId)setView(input.view??state.view,input.selectedId??state.selectedId);if(input.aspect)setAspect(input.aspect);return snapshot();}},
+    {name:'set_signal_preview',title:'调整演出预览',description:'Change preview layout, framing and aspect ratio without changing animation.',inputSchema:{type:'object',properties:{aspect:{type:'string',enum:['16:9','4:3','1:1','9:16']},framing:{type:'string',enum:['crop','fit','reflow']},view:{type:'string',enum:['grid','single','focus','carousel','paged']},selectedId:{type:'string'}},additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:input=>{if(input.view||input.selectedId)setView(input.view??state.view,input.selectedId??state.selectedId);if(input.aspect||input.framing)setAspect(input.aspect??state.aspect,input.framing??state.framing);return snapshot();}},
     {name:'import_signal_settings',title:'导入演出配置',description:'Import a SIGNAL JSON configuration, or an option array. Validate the entire document before replacing settings. Unavailable in preset mode.',inputSchema:{type:'object',properties:{json:{type:'string'}},required:['json'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},execute:input=>{if(state.source.mode!=='custom')throw new Error('预设模式下不能导入。');return applyImport(input.json);}},
     {name:'get_signal_scene',title:'读取数字演出',description:'Read current options, source mode, layout, time and playback state.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:()=>snapshot()},
-    {name:'configure_signal_options',title:'修改演出选项',description:'Replace all custom options in one batch. Unavailable in preset mode. Updates the same scene as the visible editor.',inputSchema:{type:'object',properties:{options:{type:'array',minItems:1,maxItems:8,items:{type:'object',properties:{id:{type:'string'},label:{type:'string'},value:{type:'string'}},required:['id','label','value'],additionalProperties:false}}},required:['options'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},execute:input=>setOptions(input.options)},
-    {name:'seek_signal_scene',title:'查看演出帧',description:`Pause playback and seek to a time between 0 and ${APP_CONFIG.duration} seconds.`,inputSchema:{type:'object',properties:{time:{type:'number',minimum:0,maximum:APP_CONFIG.duration}},required:['time'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:input=>seek(input.time)},
+    {name:'configure_signal_options',title:'修改演出选项',description:'Replace all custom options in one batch. Unavailable in preset mode. Updates the same scene as the visible editor.',inputSchema:{type:'object',properties:{options:{type:'array',minItems:1,maxItems:APP_CONFIG.maxOptions,items:{type:'object',properties:{id:{type:'string'},label:{type:'string'},value:{type:'string'}},required:['id','label','value'],additionalProperties:false}}},required:['options'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},execute:input=>setOptions(input.options)},
+    {name:'seek_signal_scene',title:'查看演出帧',description:'Pause playback and seek to a project time.',inputSchema:{type:'object',properties:{time:{type:'number',minimum:0}},required:['time'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:input=>seek(input.time)},
     {name:'set_signal_option_source',title:'切换选项来源',description:'Switch between development custom input and release preset selection. Built-in preset ids: four-difficulties, ez-zero.',inputSchema:{type:'object',properties:{mode:{type:'string',enum:['custom','preset']},presetId:{type:'string'}},required:['mode'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:input=>setOptionSource(input)}
   ];
   for(const tool of tools){try{Promise.resolve(context.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}}
@@ -247,3 +416,7 @@ try{
   if(!document.fonts.check('900 320px Saira'))throw new Error('Font unavailable');
   state.ready=true;renderEditor();setView(state.view,state.selectedId);setAspect(state.aspect);$('loading').hidden=true;$('play').disabled=false;updatePlayButton();registerTools();
 }catch{$('loading').textContent='Saira 字体加载失败，请刷新页面重试。';announce('字体尚未就绪。');}
+if(state.ready){
+  try{const {initStudioFeatures}=await import('./studio-features.js');await initStudioFeatures(window.ReplicaApp);}
+  catch(error){announce(`Studio 扩展初始化失败：${error.message}`);console.error(error);}
+}
