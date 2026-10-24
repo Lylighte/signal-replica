@@ -1,7 +1,14 @@
 import {APP_CONFIG,MOTION} from './config.js';
 import {DEFAULT_DESIGN,validateDesign} from './design.js';
 import {ScreenCurve} from './screen-curve.js';
+import {createCanvasColorStyle} from './themes.js';
 export const WIDTH=1920, HEIGHT=1080;
+export const VIEWPORTS=Object.freeze({
+  '16:9':Object.freeze({width:1920,height:1080}),
+  '4:3':Object.freeze({width:1440,height:1080}),
+  '1:1':Object.freeze({width:1080,height:1080}),
+  '9:16':Object.freeze({width:1080,height:1920})
+});
 export const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
 export const numberSettleEnd=(count,design=DEFAULT_DESIGN)=>MOTION.numberSettle+(count-1)*design.settleStagger;
 export function getPhase(t,design=DEFAULT_DESIGN,digits=2){return t<design.introDuration?'选项入场':t<MOTION.selectStart?(selectedOptionOpacity(t,design)<1?'选项按下 · 消失再显示':'难度选择'):t<MOTION.expandStart?'选项居中':entryState(t).flash?'展开 · 撕裂反色':t<MOTION.expandStart+design.expandDuration?'展开 · 数字滚入':t<numberSettleEnd(digits,design)?'缓动就位':t<MOTION.rollStart?'稳定显示':t<MOTION.sideStart?'逐渐加速':t<MOTION.sideStart+design.pushDuration?'高位渐入 · 右推':t<MOTION.exitStart?'高速滚动':'故障消隐';}
@@ -139,81 +146,134 @@ export function numberColumns(value,time,design=DEFAULT_DESIGN){
   }
   return columns;
 }
-export function layoutPanels(options,view,selectedId){
+export function layoutPanels(options,view,selectedId,{width=WIDTH,height=HEIGHT,columns,spacing=0,page=0,pageSize}={}){
   const active=view==='single'?[options.find(x=>x.id===selectedId)??options[0]]:options;
-  const cols=active.length===1?1:active.length<=4?2:active.length<=6?3:4;
-  const rows=Math.ceil(active.length/cols),scale=Math.min(1440/(cols*720),1080/(rows*540));
-  const top=(HEIGHT-rows*540*scale)/2;
-  return active.map((option,index)=>{
-    const row=Math.floor(index/cols),itemsInRow=Math.min(cols,active.length-row*cols);
-    return {option,index,scale,x:(WIDTH-itemsInRow*720*scale)/2+(index%cols)*720*scale,y:top+row*540*scale};
+  const requestedColumns=Number.isInteger(columns)?clamp(columns,1,4):undefined;
+  const cols=requestedColumns??(active.length===1?1:active.length<=4?2:active.length<=6?3:4);
+  const effectivePageSize=pageSize??Math.max(cols,cols*4),first=Math.max(0,page)*effectivePageSize;
+  const visible=active.length>effectivePageSize?active.slice(first,first+effectivePageSize):active;
+  const rows=Math.max(1,Math.ceil(visible.length/cols));
+  const safeWidth=Math.min(1440,width),safeLeft=(width-safeWidth)/2;
+  const availableWidth=Math.max(1,safeWidth-Math.max(0,cols-1)*spacing),availableHeight=Math.max(1,height-Math.max(0,rows-1)*spacing);
+  const scale=Math.min(availableWidth/(cols*720),availableHeight/(rows*540));
+  const blockHeight=rows*540*scale+(rows-1)*spacing,top=(height-blockHeight)/2;
+  return visible.map((option,index)=>{
+    const row=Math.floor(index/cols),itemsInRow=Math.min(cols,visible.length-row*cols);
+    const rowWidth=itemsInRow*720*scale+(itemsInRow-1)*spacing;
+    return {option,index:first+index,scale,x:safeLeft+(safeWidth-rowWidth)/2+(index%cols)*(720*scale+spacing),y:top+row*(540*scale+spacing)};
   });
 }
+// The original four-option composition intentionally repeats the selection
+// row in every panel. Beyond four options that row becomes unreadable, so a
+// dense Studio layout animates each panel's own option instead.
+export const panelSelectionOptions=(options,option)=>options.length<=4?options:[option];
 function makeCanvas(w,h){const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;return canvas;}
 
+export function createViewportMapping(pixelWidth,pixelHeight,{aspect='16:9',framing='reflow'}={}){
+  if(!Object.hasOwn(VIEWPORTS,aspect))throw new Error('画面比例无效。');
+  if(!['crop','fit','reflow'].includes(framing))throw new Error('画幅适配方式无效。');
+  const logical=framing==='reflow'?VIEWPORTS[aspect]:VIEWPORTS['16:9'];
+  const scale=(framing==='crop'?Math.max:Math.min)(pixelWidth/logical.width,pixelHeight/logical.height);
+  return Object.freeze({pixelWidth,pixelHeight,logicalWidth:logical.width,logicalHeight:logical.height,scale,offsetX:(pixelWidth-logical.width*scale)/2,offsetY:(pixelHeight-logical.height*scale)/2,aspect,framing});
+}
+
 export class SignalRenderer {
-  constructor(canvas){
+  constructor(canvas,{aspect='16:9',framing='reflow'}={}){
     this.canvas=canvas;this.ctx=canvas.getContext('2d',{alpha:false});
+    if(!this.ctx)throw new Error('当前浏览器无法创建 2D 画布。');
+    this.mapping=createViewportMapping(canvas.width,canvas.height,{aspect,framing});
+    this.logicalWidth=this.mapping.logicalWidth;this.logicalHeight=this.mapping.logicalHeight;this.pixelScale=this.mapping.scale;
     this.screenCurve=new ScreenCurve();this.curvatureSupported=true;
-    this.frame=makeCanvas(WIDTH,HEIGHT);this.work=this.frame.getContext('2d',{alpha:false});
+    this.frame=makeCanvas(canvas.width,canvas.height);this.work=this.frame.getContext('2d',{alpha:false});
     this.glyphs=new Map();this.labels=new Map();this.supportsFilter='filter' in this.work;
-    this.compressed=makeCanvas(WIDTH,54);this.softened=makeCanvas(WIDTH,54);
-    this.design={...DEFAULT_DESIGN};this.setDesign({});
+    this.compressed=makeCanvas(canvas.width,Math.max(1,Math.round(54*this.pixelScale)));this.softened=makeCanvas(canvas.width,this.compressed.height);
+    this.design={...DEFAULT_DESIGN};this.sceneStyle={};this.sceneStyleSignature='';this.setDesign({});
+  }
+  mapContext(ctx){const m=this.mapping;ctx.setTransform(m.scale,0,0,m.scale,m.offsetX,m.offsetY);return ctx;}
+  pixelContext(ctx){ctx.setTransform(1,0,0,1,0,0);return ctx;}
+  logicalRectToPixels(x,y,width,height){const m=this.mapping;return{x:m.offsetX+x*m.scale,y:m.offsetY+y*m.scale,width:width*m.scale,height:height*m.scale};}
+  paint(ctx,value,fallback,bounds={x:0,y:0,width:this.canvas.width,height:this.canvas.height}){
+    try{return createCanvasColorStyle(ctx,value??fallback,bounds);}catch{return fallback;}
+  }
+  setSceneStyle(style={}){
+    const normalized={theme:style.theme??{},fonts:style.fonts??{}};
+    const signature=JSON.stringify(normalized);
+    if(signature===this.sceneStyleSignature)return false;
+    this.sceneStyle=normalized;this.sceneStyleSignature=signature;this.glyphs.clear();this.labels.clear();return true;
   }
   setDesign(patch){
     this.design=validateDesign(patch,this.design);this.glyphs.clear();this.labels.clear();
     const design=this.design,grey=value=>`rgb(${Math.round(value*255)},${Math.round(value*255)},${Math.round(value*255)})`;
     // One fixed light field across the whole canvas. Multiplication preserves black.
-    this.vignette=makeCanvas(WIDTH,HEIGHT);
-    const light=this.vignette.getContext('2d');
-    light.translate(WIDTH/2,HEIGHT/2);light.scale(WIDTH/2,HEIGHT/2);
+    this.vignette=makeCanvas(this.canvas.width,this.canvas.height);
+    const light=this.mapContext(this.vignette.getContext('2d'));
+    light.translate(this.logicalWidth/2,this.logicalHeight/2);light.scale(this.logicalWidth/2,this.logicalHeight/2);
     const falloff=light.createRadialGradient(0,0,0,0,0,Math.SQRT2);
     falloff.addColorStop(0,grey(design.centerBrightness));
     falloff.addColorStop(design.vignetteKnee,grey(design.centerBrightness*.75+design.edgeBrightness*.25));falloff.addColorStop(1,grey(design.edgeBrightness));
     light.fillStyle=falloff;light.fillRect(-1,-1,2,2);
     // Applied after smearing and inversion, so bright glyphs and halos retain it.
     // Black ink attenuates in proportion to the pixel's brightness; black stays black.
-    this.scanlines=makeCanvas(WIDTH,HEIGHT);
-    const scan=this.scanlines.getContext('2d');scan.fillStyle=`rgba(0,0,0,${design.scanLineStrength})`;
-    for(let y=0;y<HEIGHT;y+=design.scanLineSpacing)scan.fillRect(0,y,WIDTH,Math.min(design.scanLineWidth,design.scanLineSpacing-1));
-    this.noiseTexture=makeCanvas(WIDTH,HEIGHT);this.noiseSeed=-1;
+    this.scanlines=makeCanvas(this.canvas.width,this.canvas.height);
+    const scan=this.mapContext(this.scanlines.getContext('2d'));scan.fillStyle=this.paint(scan,this.sceneStyle.theme?.scanlineColor,`rgba(0,0,0,${design.scanLineStrength})`,{x:0,y:0,width:this.logicalWidth,height:this.logicalHeight});
+    for(let y=0;y<this.logicalHeight;y+=design.scanLineSpacing)scan.fillRect(0,y,this.logicalWidth,Math.min(design.scanLineWidth,design.scanLineSpacing-1));
+    if(this.noiseTexture){this.noiseTexture.width=1;this.noiseTexture.height=1;}
+    this.noiseTexture=null;this.noiseSeed=-1;
   }
   glyph(digit){
     if(this.glyphs.has(digit))return this.glyphs.get(digit);
-    const design=this.design,probe=this.work;probe.font=`${design.numberWeight} ${design.numberSize}px Saira`;
+    const design=this.design,probe=this.work,family=this.sceneStyle.fonts?.numberFamily??'Saira';probe.font=`${design.numberWeight} ${design.numberSize}px ${JSON.stringify(family)}, Saira`;
     const size=probe.measureText(String(digit)),pad=Math.ceil(Math.max(4,design.numberGlowRadius*3));
     const width=Math.ceil(size.width*design.numberWidth+pad*2),height=Math.ceil(size.actualBoundingBoxAscent+size.actualBoundingBoxDescent+pad*2);
-    const glyph=makeCanvas(width,height),ctx=glyph.getContext('2d');
-    const mask=makeCanvas(width,height),m=mask.getContext('2d');
-    m.font=`${design.numberWeight} ${design.numberSize}px Saira`;m.textAlign='center';m.textBaseline='alphabetic';
+    const glyph=makeCanvas(Math.ceil(width*this.pixelScale),Math.ceil(height*this.pixelScale)),ctx=glyph.getContext('2d');
+    const mask=makeCanvas(glyph.width,glyph.height),m=mask.getContext('2d');
+    glyph.logicalWidth=mask.logicalWidth=width;glyph.logicalHeight=mask.logicalHeight=height;
+    ctx.setTransform(this.pixelScale,0,0,this.pixelScale,0,0);m.setTransform(this.pixelScale,0,0,this.pixelScale,0,0);
+    m.font=`${design.numberWeight} ${design.numberSize}px ${JSON.stringify(family)}, Saira`;if('letterSpacing'in m)m.letterSpacing=`${this.sceneStyle.fonts?.numberLetterSpacing??0}px`;m.textAlign='center';m.textBaseline='alphabetic';
     const bounds=m.measureText(String(digit));
     const baseline=height/2+(bounds.actualBoundingBoxAscent-bounds.actualBoundingBoxDescent)/2;
-    m.translate(width/2,0);m.scale(design.numberWidth,1);m.fillStyle='#fff';m.fillText(String(digit),0,baseline);
+    m.translate(width/2,0);m.scale(design.numberWidth,1);m.fillStyle='#fff';
+    const numberStroke=Number(this.sceneStyle.fonts?.numberStroke)||0;if(numberStroke>0){m.strokeStyle='#fff';m.lineWidth=numberStroke*2;m.lineJoin='round';m.strokeText(String(digit),0,baseline);}m.fillText(String(digit),0,baseline);
+    const glowMask=makeCanvas(mask.width,mask.height),glowContext=glowMask.getContext('2d');glowContext.drawImage(mask,0,0);glowContext.globalCompositeOperation='source-in';
+    glowContext.fillStyle=this.paint(glowContext,this.sceneStyle.theme?.glowColor,'#ffffff',{x:0,y:0,width:glowMask.width,height:glowMask.height});glowContext.fillRect(0,0,glowMask.width,glowMask.height);
+    const numberShadow=Number(this.sceneStyle.fonts?.numberShadow)||0,glowRadius=design.numberGlowRadius+numberShadow;
     if(this.supportsFilter){
-      ctx.filter=`blur(${design.numberGlowRadius}px)`;ctx.globalAlpha=Math.min(1,.4*design.numberGlowStrength);ctx.drawImage(mask,0,0);
-      ctx.filter=`blur(${design.numberGlowRadius*.41}px)`;ctx.globalAlpha=Math.min(1,.6*design.numberGlowStrength);ctx.drawImage(mask,0,0);
+      ctx.filter=`blur(${glowRadius*this.pixelScale}px)`;ctx.globalAlpha=Math.min(1,.4*design.numberGlowStrength);ctx.drawImage(glowMask,0,0,width,height);
+      ctx.filter=`blur(${glowRadius*.41*this.pixelScale}px)`;ctx.globalAlpha=Math.min(1,.6*design.numberGlowStrength);ctx.drawImage(glowMask,0,0,width,height);
       ctx.filter='none';ctx.globalAlpha=1;
-    }else{ctx.shadowColor=`rgba(255,255,255,${Math.min(1,design.numberGlowStrength)})`;ctx.shadowBlur=design.numberGlowRadius;ctx.drawImage(mask,0,0);ctx.shadowBlur=0;}
+    }else{const glowColor=this.sceneStyle.theme?.glowColor;ctx.shadowColor=typeof glowColor==='string'&&!/^linear-gradient/i.test(glowColor)?glowColor:`rgba(255,255,255,${Math.min(1,design.numberGlowStrength)})`;ctx.shadowBlur=glowRadius;ctx.drawImage(mask,0,0,width,height);ctx.shadowBlur=0;}
     m.resetTransform();m.globalCompositeOperation='source-in';
-    m.fillStyle=`rgb(${design.numberBrightness},${design.numberBrightness},${design.numberBrightness})`;m.fillRect(0,0,width,height);m.globalCompositeOperation='source-atop';m.fillStyle=`rgba(255,255,255,${design.scanStrength})`;
-    for(let y=pad;y<height-pad;y+=design.scanSpacing)m.fillRect(0,y,width,noise(y)>.5?1:.5);
-    ctx.drawImage(mask,0,0);this.glyphs.set(digit,glyph);return glyph;
+    m.fillStyle=this.paint(m,this.sceneStyle.theme?.numberColor,`rgb(${design.numberBrightness},${design.numberBrightness},${design.numberBrightness})`,{x:0,y:0,width:glyph.width,height:glyph.height});m.fillRect(0,0,glyph.width,glyph.height);m.globalCompositeOperation='source-atop';m.fillStyle=`rgba(255,255,255,${design.scanStrength})`;
+    m.setTransform(this.pixelScale,0,0,this.pixelScale,0,0);for(let y=pad;y<height-pad;y+=design.scanSpacing)m.fillRect(0,y,width,noise(y)>.5?1:.5);
+    ctx.drawImage(mask,0,0,width,height);this.glyphs.set(digit,glyph);return glyph;
   }
   label(text){
     if(this.labels.has(text))return this.labels.get(text);
     if(this.labels.size>80)this.labels.clear();
-    const design=this.design,font=`${design.labelWeight} ${design.labelSize}px Saira, "Microsoft YaHei", sans-serif`;this.work.font=font;
+    const design=this.design,family=this.sceneStyle.fonts?.textFamily??'Saira',font=`${design.labelWeight} ${design.labelSize}px ${JSON.stringify(family)}, Saira, "Microsoft YaHei", sans-serif`;this.work.font=font;
     const pad=Math.max(4,design.labelGlowRadius*3),width=Math.ceil(this.work.measureText(text).width+pad*2),height=Math.ceil(design.labelSize*1.5+pad*2);
-    const canvas=makeCanvas(width,height),ctx=canvas.getContext('2d');
-    ctx.font=font;ctx.textBaseline='middle';ctx.textAlign='center';
-    ctx.fillStyle=`rgb(${design.labelBrightness},${design.labelBrightness},${design.labelBrightness})`;ctx.shadowColor=`rgba(255,255,255,${Math.min(1,design.labelGlowStrength)})`;ctx.shadowBlur=design.labelGlowRadius;ctx.fillText(text,width/2,height/2);
+    const canvas=makeCanvas(Math.ceil(width*this.pixelScale),Math.ceil(height*this.pixelScale)),ctx=canvas.getContext('2d');canvas.logicalWidth=width;canvas.logicalHeight=height;
+    const textStroke=Number(this.sceneStyle.fonts?.textStroke)||0,configure=context=>{context.setTransform(this.pixelScale,0,0,this.pixelScale,0,0);context.font=font;if('letterSpacing'in context)context.letterSpacing=`${this.sceneStyle.fonts?.textLetterSpacing??0}px`;context.textBaseline='middle';context.textAlign='center';context.lineJoin='round';};
+    const glowRadius=design.labelGlowRadius+(Number(this.sceneStyle.fonts?.textShadow)||0),glowValue=this.sceneStyle.theme?.glowColor??'#ffffff';
+    if(this.supportsFilter&&glowRadius>0&&design.labelGlowStrength>0){
+      const mask=makeCanvas(canvas.width,canvas.height),maskContext=mask.getContext('2d');configure(maskContext);maskContext.fillStyle='#fff';
+      if(textStroke>0){maskContext.strokeStyle='#fff';maskContext.lineWidth=textStroke*2;maskContext.strokeText(text,width/2,height/2);}maskContext.fillText(text,width/2,height/2);
+      const coloured=makeCanvas(canvas.width,canvas.height),colourContext=coloured.getContext('2d');colourContext.drawImage(mask,0,0);colourContext.globalCompositeOperation='source-in';
+      colourContext.fillStyle=this.paint(colourContext,glowValue,'#ffffff',{x:0,y:0,width:canvas.width,height:canvas.height});colourContext.fillRect(0,0,canvas.width,canvas.height);
+      ctx.save();ctx.filter=`blur(${glowRadius*this.pixelScale}px)`;ctx.globalAlpha=Math.min(1,.7*design.labelGlowStrength);ctx.drawImage(coloured,0,0);if(design.labelGlowStrength>1.4)ctx.drawImage(coloured,0,0);ctx.restore();
+      mask.width=1;mask.height=1;coloured.width=1;coloured.height=1;
+    }
+    configure(ctx);ctx.fillStyle=this.paint(ctx,this.sceneStyle.theme?.textColor,`rgb(${design.labelBrightness},${design.labelBrightness},${design.labelBrightness})`,{x:0,y:0,width,height});
+    if(!this.supportsFilter){ctx.shadowColor=typeof glowValue==='string'&&!/^linear-gradient/i.test(glowValue)?glowValue:'#ffffff';ctx.shadowBlur=glowRadius;}
+    if(textStroke>0){ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=textStroke*2;ctx.strokeText(text,width/2,height/2);}ctx.fillText(text,width/2,height/2);
     if(design.labelGlowStrength>1)ctx.fillText(text,width/2,height/2);
     this.labels.set(text,canvas);return canvas;
   }
   drawLabel(ctx,text,x,y,maxWidth=150,alpha=1){
     ctx.save();ctx.globalAlpha*=alpha;
     const cache=this.label(text),measure=ctx.measureText(text).width,ratio=Math.min(1,maxWidth/Math.max(1,measure));
-    ctx.drawImage(cache,x-cache.width/2*ratio,y-cache.height/2,cache.width*ratio,cache.height);ctx.restore();
+    const width=cache.logicalWidth??cache.width,height=cache.logicalHeight??cache.height;
+    ctx.drawImage(cache,x-width/2*ratio,y-height/2,width*ratio,height);ctx.restore();
   }
   drawExpandedLabel(ctx,text,tracking,alpha){
     if(tracking<=0){this.drawLabel(ctx,text,0,0,Infinity,alpha);return;}
@@ -225,8 +285,8 @@ export class SignalRenderer {
     }
   }
   panel(ctx,option,allOptions,time){
-    const design=this.design;
-    ctx.font=`${design.labelWeight} ${design.labelSize}px Saira, "Microsoft YaHei", sans-serif`;
+    const design=this.design,family=this.sceneStyle.fonts?.textFamily??'Saira';
+    ctx.font=`${design.labelWeight} ${design.labelSize}px ${JSON.stringify(family)}, Saira, "Microsoft YaHei", sans-serif`;
     if(time<MOTION.expandStart){
       const entrance=optionEntrance(time,design),selectedIndex=allOptions.findIndex(o=>o.id===option.id),positions=optionPositions(time,allOptions.length,selectedIndex,design);
       allOptions.forEach((other,index)=>{
@@ -263,7 +323,7 @@ export class SignalRenderer {
         for(let k=-2;k<=2;k++){
           const y=(k-fraction)*pitch;
           const digit=modulo(column.initialDigit+whole+k,10);
-          const glyph=this.glyph(digit),w=glyph.width*scaleX*scaleY,h=glyph.height*scaleY;
+          const glyph=this.glyph(digit),w=(glyph.logicalWidth??glyph.width)*scaleX*scaleY,h=(glyph.logicalHeight??glyph.height)*scaleY;
           if(Math.abs(y)>270+h/2)continue;
           ctx.drawImage(glyph,x-w/2,y-h/2,w,h);
         }
@@ -280,9 +340,11 @@ export class SignalRenderer {
     if(!amount)return;
     const seed=Math.floor(time*30),design=this.design;
     if(seed!==this.noiseSeed){
-      const texture=this.noiseTexture.getContext('2d');texture.fillStyle='#fff';texture.fillRect(0,0,WIDTH,HEIGHT);
+      if(!this.noiseTexture)this.noiseTexture=makeCanvas(this.canvas.width,this.canvas.height);
+      const texture=this.mapContext(this.noiseTexture.getContext('2d'));texture.fillStyle='#fff';texture.fillRect(0,0,this.logicalWidth,this.logicalHeight);
+      const contentWidth=Math.min(1440,this.logicalWidth),contentLeft=(this.logicalWidth-contentWidth)/2;
       for(let i=0;i<design.noiseDensity;i++){
-        const key=seed*1777+i*13,x=240+noise(key)*1440,y=noise(key+1)*HEIGHT;
+        const key=seed*1777+i*13,x=contentLeft+noise(key)*contentWidth,y=noise(key+1)*this.logicalHeight;
         const w=design.noiseBlockSize*(.4+noise(key+2)*3),h=design.noiseBlockSize*(.25+noise(key+3)*1.5);
         texture.fillStyle=`rgba(0,0,0,${.15+noise(key+4)*.6})`;texture.fillRect(x,y,w,h);
         texture.fillStyle='rgba(0,0,0,.45)';
@@ -290,59 +352,73 @@ export class SignalRenderer {
       }
       for(let i=0;i<14;i++){
         const key=seed*97+i*7;texture.fillStyle=`rgba(0,0,0,${design.noiseBandStrength*(.3+noise(key))})`;
-        texture.fillRect(240+noise(key+1)*720,noise(key+2)*HEIGHT,120+noise(key+3)*600,2+noise(key+4)*18);
+        texture.fillRect(contentLeft+noise(key+1)*contentWidth*.5,noise(key+2)*this.logicalHeight,Math.min(contentWidth,120+noise(key+3)*600),2+noise(key+4)*18);
       }
       this.noiseSeed=seed;
     }
-    output.globalCompositeOperation='multiply';output.globalAlpha=amount;output.drawImage(this.noiseTexture,0,0);
+    this.pixelContext(output);output.globalCompositeOperation='multiply';output.globalAlpha=amount;output.drawImage(this.noiseTexture,0,0);
     output.globalCompositeOperation='source-over';output.globalAlpha=1;
   }
-  render(time,options,view='grid',selectedId=options[0].id){
-    const design=this.design,ctx=this.work,output=this.ctx,t=clamp(time,0,APP_CONFIG.duration);
-    ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.fillStyle='#000';ctx.fillRect(0,0,WIDTH,HEIGHT);
-    if(t<MOTION.blankAt)layoutPanels(options,view,selectedId).forEach(({option,x,y,scale})=>{
-      ctx.save();ctx.translate(x,y);ctx.scale(scale,scale);ctx.beginPath();ctx.rect(0,0,720,540);ctx.clip();
-      this.panel(ctx,option,options,t);ctx.restore();
+  render(time,options,view='grid',selectedId=options[0].id,scene={}){
+    if(this.setSceneStyle(scene))this.setDesign({});
+    const design=this.design,ctx=this.work,output=this.ctx,t=clamp(scene.signalTime??time,0,APP_CONFIG.duration);
+    const effect=scene.beatEffect??{},shake=Number(effect.shake)||0,jump=Number(effect.numberJump)||0;
+    const shakeX=shake?Math.sin(time*91.73)*shake*18:0,shakeY=shake?Math.sin(time*67.19+1.7)*shake*12:0;
+    const panels=scene.panels??layoutPanels(options,view,selectedId,{width:this.logicalWidth,height:this.logicalHeight,...scene.layout});
+    this.pixelContext(ctx);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.fillStyle=this.paint(ctx,scene.theme?.backgroundColor,'#000');ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+    this.mapContext(ctx);ctx.translate(shakeX,shakeY);
+    if(t<MOTION.blankAt)panels.forEach(({option,x,y,scale,opacity=1,rotation=0})=>{
+      const transform=scene.optionTransforms?.[option.id]??{};
+      ctx.save();ctx.globalAlpha*=clamp((transform.opacity??1)*opacity,0,1);ctx.translate(x+(transform.x??0),y+(transform.y??0)-jump*28);ctx.rotate((rotation+(transform.rotation??0))*Math.PI/180);ctx.scale(scale*(transform.scale??1),scale*(transform.scale??1));ctx.beginPath();ctx.rect(0,0,720,540);ctx.clip();
+      this.panel(ctx,option,panelSelectionOptions(options,option),t);ctx.restore();
     });
-    output.globalCompositeOperation='source-over';output.globalAlpha=1;
+    this.pixelContext(output);output.globalCompositeOperation='source-over';output.globalAlpha=1;
     if(t>MOTION.rollStart+.3&&t<MOTION.fadeStart&&this.supportsFilter){
-      // Compress Y before blurring: vertical smearing without wide horizontal blur.
+      // Work at the requested pixel dimensions so 2K/4K is rasterized natively.
       const speed=reelSpeed(t)*design.rollSpeed;
-      const h=Math.max(14,Math.round(HEIGHT/Math.max(1,speed*1.1*design.motionBlur)));
+      const h=Math.max(Math.round(14*this.pixelScale),Math.round(this.canvas.height/Math.max(1,speed*1.1*design.motionBlur)));
       if(this.compressed.height!==h){this.compressed.height=h;this.softened.height=h;}
       const small=this.compressed.getContext('2d'),soft=this.softened.getContext('2d');
-      small.clearRect(0,0,WIDTH,h);small.drawImage(this.frame,0,0,WIDTH,h);
-      soft.clearRect(0,0,WIDTH,h);soft.filter='blur(1.7px)';soft.drawImage(this.compressed,0,0);soft.filter='none';
-      output.fillStyle='#000';output.fillRect(0,0,WIDTH,HEIGHT);output.drawImage(this.softened,0,0,WIDTH,HEIGHT);
-      layoutPanels(options,view,selectedId).forEach(({option,x,y,scale})=>{
-        output.save();output.translate(x,y);output.scale(scale,scale);output.beginPath();output.rect(0,0,720,540);output.clip();output.font=`${design.labelWeight} ${design.labelSize}px Saira, "Microsoft YaHei", sans-serif`;
+      small.clearRect(0,0,this.canvas.width,h);small.drawImage(this.frame,0,0,this.canvas.width,h);
+      soft.clearRect(0,0,this.canvas.width,h);soft.filter=`blur(${Math.max(1,1.7*this.pixelScale)}px)`;soft.drawImage(this.compressed,0,0);soft.filter='none';
+      output.fillStyle=this.paint(output,scene.theme?.backgroundColor,'#000');output.fillRect(0,0,this.canvas.width,this.canvas.height);output.drawImage(this.softened,0,0,this.canvas.width,this.canvas.height);
+      this.mapContext(output);output.translate(shakeX,shakeY);
+      const family=this.sceneStyle.fonts?.textFamily??'Saira';
+      panels.forEach(({option,x,y,scale,opacity=1,rotation=0})=>{
+        const transform=scene.optionTransforms?.[option.id]??{};
+        output.save();output.globalAlpha*=clamp((transform.opacity??1)*opacity,0,1);output.translate(x+(transform.x??0),y+(transform.y??0)-jump*28);output.rotate((rotation+(transform.rotation??0))*Math.PI/180);output.scale(scale*(transform.scale??1),scale*(transform.scale??1));output.beginPath();output.rect(0,0,720,540);output.clip();output.font=`${design.labelWeight} ${design.labelSize}px ${JSON.stringify(family)}, Saira, "Microsoft YaHei", sans-serif`;
         const drift=labelPositions(t,design);this.drawLabel(output,'<'+option.label,drift.left,270,design.labelMaxWidth);this.drawLabel(output,'>',drift.right,270,40);output.restore();
       });
+      this.pixelContext(output);
     }else output.drawImage(this.frame,0,0);
     output.globalCompositeOperation='multiply';output.drawImage(this.vignette,0,0);output.globalCompositeOperation='source-over';
-    const strength=this.glitchIntensity(t)*design.glitchStrength,seed=Math.floor(t*30),entranceGlitch=entryGlitch(t);
+    const strength=(this.glitchIntensity(t)+(Number(effect.glitch)||0))*design.glitchStrength,seed=Math.floor(t*30),entranceGlitch=entryGlitch(t);
+    const content=this.logicalRectToPixels((this.logicalWidth-Math.min(1440,this.logicalWidth))/2,0,Math.min(1440,this.logicalWidth),this.logicalHeight);
     if(entranceGlitch==='wash'&&design.glitchStrength>0){
-      // The reference inserts one uniform grey frame before each inverted tear.
-      output.fillStyle=`rgb(${design.washBrightness},${design.washBrightness},${design.washBrightness})`;output.fillRect(0,0,WIDTH,HEIGHT);
+      output.fillStyle=scene.theme?.washColor??`rgb(${design.washBrightness},${design.washBrightness},${design.washBrightness})`;output.fillRect(0,0,this.canvas.width,this.canvas.height);
     }else if(strength){
       const entryTear=entranceGlitch!=='none',thin=entranceGlitch==='invert',strips=entryTear?(thin?130:42):Math.ceil(18*strength);
       for(let i=0;i<strips;i++){
-        const y=Math.floor(noise(seed*61+i)*HEIGHT),h=entryTear?(thin?1+Math.floor(noise(seed+i+10)*2):4+Math.floor(noise(seed+i+10)*28*design.glitchStrength)):Math.max(2,Math.floor(noise(seed*3+i+10)*55*strength)),shift=(noise(seed*17+i+30)-.5)*(thin?18*design.glitchStrength:180*strength);
-        output.fillStyle=noise(seed+i)>.62?'#adadad':'#000';output.fillRect(240,y,1440,h);
-        output.drawImage(this.frame,240,y,1440,Math.min(h,HEIGHT-y),240+shift,y,1440,Math.min(h,HEIGHT-y));
-        if(!entryTear&&noise(seed+i*4)>.6){output.globalCompositeOperation='screen';output.globalAlpha=.28*strength;output.fillStyle=i%2?'#00a9bf':'#df4410';output.fillRect(240+shift,y+h,1440,2);output.globalCompositeOperation='source-over';output.globalAlpha=1;}
+        const y=Math.floor(content.y+noise(seed*61+i)*content.height),h=Math.max(1,(entryTear?(thin?1+Math.floor(noise(seed+i+10)*2):4+Math.floor(noise(seed+i+10)*28*design.glitchStrength)):Math.max(2,Math.floor(noise(seed*3+i+10)*55*strength)))*this.pixelScale),shift=(noise(seed*17+i+30)-.5)*(thin?18*design.glitchStrength:180*strength)*this.pixelScale;
+        output.fillStyle=noise(seed+i)>.62?this.paint(output,scene.theme?.glitchLight,'#adadad',{x:content.x,y,width:content.width,height:h}):(scene.theme?.glitchDark??'#000');output.fillRect(content.x,y,content.width,h);
+        output.drawImage(this.frame,content.x,y,content.width,Math.min(h,this.canvas.height-y),content.x+shift,y,content.width,Math.min(h,this.canvas.height-y));
+        if(!entryTear&&noise(seed+i*4)>.6){output.globalCompositeOperation='screen';output.globalAlpha=.28*strength;output.fillStyle=i%2?(scene.theme?.glitchA??'#00a9bf'):(scene.theme?.glitchB??'#df4410');output.fillRect(content.x+shift,y+h,content.width,Math.max(1,2*this.pixelScale));output.globalCompositeOperation='source-over';output.globalAlpha=1;}
       }
-      if(thin||(t>MOTION.exitStart&&noise(seed+31)>.3)){output.globalCompositeOperation='difference';output.fillStyle=thin?`rgb(${design.flashBrightness},${design.flashBrightness},${design.flashBrightness})`:'rgba(255,255,255,.8)';output.fillRect(0,0,WIDTH,HEIGHT);output.globalCompositeOperation='source-over';}
+      if(thin||(t>MOTION.exitStart&&noise(seed+31)>.3)){output.globalCompositeOperation='difference';output.fillStyle=thin?this.paint(output,scene.theme?.flashColor,`rgb(${design.flashBrightness},${design.flashBrightness},${design.flashBrightness})`):'rgba(255,255,255,.8)';output.fillRect(0,0,this.canvas.width,this.canvas.height);output.globalCompositeOperation='source-over';}
     }
-    this.drawPreRollNoise(output,t);
+    this.drawPreRollNoise(output,t);this.pixelContext(output);
+    const rgb=clamp(Number(effect.rgbSplit)||0,0,1);
+    if(rgb){output.save();output.globalCompositeOperation='screen';output.globalAlpha=.22*rgb;output.filter='sepia(1) saturate(8) hue-rotate(125deg)';output.drawImage(this.frame,Math.max(1,8*this.pixelScale*rgb),0);output.filter='sepia(1) saturate(8) hue-rotate(300deg)';output.drawImage(this.frame,-Math.max(1,8*this.pixelScale*rgb),0);output.restore();}
     output.drawImage(this.scanlines,0,0);
-    if(t>MOTION.fadeStart){output.fillStyle=`rgba(0,0,0,${smooth((t-MOTION.fadeStart)/.12)})`;output.fillRect(0,0,WIDTH,HEIGHT);}
+    if(typeof scene.drawLayers==='function')scene.drawLayers({ctx:output,time,pixelWidth:this.canvas.width,pixelHeight:this.canvas.height,mapping:this.mapping});
+    const flash=clamp(Number(effect.flash)||0,0,1);if(flash){output.fillStyle=`rgba(255,255,255,${flash*.42})`;output.fillRect(0,0,this.canvas.width,this.canvas.height);}
+    if(t>MOTION.fadeStart){output.fillStyle=`rgba(0,0,0,${smooth((t-MOTION.fadeStart)/.12)})`;output.fillRect(0,0,this.canvas.width,this.canvas.height);}
     this.curvatureSupported=design.screenCurve!=='curved'||this.screenCurve.apply(this.canvas,output,design.screenCurvature);
   }
   dispose(){
     this.screenCurve.dispose();
     for(const canvas of [this.canvas,this.frame,this.compressed,this.softened,this.vignette,this.scanlines,this.noiseTexture,...this.glyphs.values(),...this.labels.values()]){
-      canvas.width=1;canvas.height=1;
+      if(canvas){canvas.width=1;canvas.height=1;}
     }
     this.glyphs.clear();this.labels.clear();
   }

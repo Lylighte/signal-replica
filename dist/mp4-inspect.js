@@ -68,7 +68,12 @@ function sampleDescription(bytes,view,stsd){
   for(let index=0;index<count;index++){
     const entry=boxesIn(bytes,view,cursor,stsd.end)[0];
     if(!entry)throw new Error('stsd 样本描述不完整。');
-    entries.push(entry.type);cursor=entry.end;
+    let avcLevel=null;
+    if(['avc1','avc3'].includes(entry.type)&&entry.dataStart+78<=entry.end){
+      const avcC=find(childBoxes(bytes,view,entry,78),'avcC');
+      if(avcC&&avcC.dataStart+4<=avcC.end)avcLevel=bytes[avcC.dataStart+3];
+    }
+    entries.push({codec:entry.type,avcLevel});cursor=entry.end;
   }
   return entries;
 }
@@ -139,14 +144,101 @@ function inspectTrack(bytes,view,trak,movieTimescale){
   const stbl=find(childBoxes(bytes,view,minf),'stbl');if(!stbl)throw new Error('MP4 track 缺少 stbl。');
   const sampleBoxes=childBoxes(bytes,view,stbl),stsd=find(sampleBoxes,'stsd'),stts=find(sampleBoxes,'stts');
   if(!stsd||!stts)throw new Error('MP4 track 缺少 stsd 或 stts。');
-  const header=trackHeader(view,tkhd,movieTimescale),timing=sampleTiming(view,stts,media.timescale),codecs=sampleDescription(bytes,view,stsd);
+  const header=trackHeader(view,tkhd,movieTimescale),timing=sampleTiming(view,stts,media.timescale),descriptions=sampleDescription(bytes,view,stsd),codecs=descriptions.map(entry=>entry.codec);
   return{
-    type,handler,codec:codecs[0]??null,codecs,
+    type,handler,codec:codecs[0]??null,codecs,avcLevel:descriptions[0]?.avcLevel??null,
     timescale:media.timescale,mediaDuration:media.duration,mediaDurationSeconds:media.duration/media.timescale,
     presentationDurationSeconds:editDuration(bytes,view,trak,movieTimescale)??header.durationSeconds,
     sampleCount:timing.sampleCount,sampleDurationSeconds:timing.durationSeconds,
     averageRate:timing.averageRate,nominalRate:timing.nominalRate,width:header.width,height:header.height
   };
+}
+
+export function patchAvcLevel(input,level,{copy=true}={}){
+  if(!Number.isInteger(level)||level<1||level>255)throw new Error('H.264 Level 数值无效。');
+  const original=asBytes(input),bytes=copy||original.byteOffset!==0||original.byteLength!==original.buffer.byteLength?original.slice():original;
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),topLevel=boxesIn(bytes,view,0,bytes.length),moov=find(topLevel,'moov');
+  if(!moov)throw new Error('MP4 缺少 moov。');
+  let patched=0;
+  for(const trak of childBoxes(bytes,view,moov).filter(box=>box.type==='trak')){
+    const mdia=find(childBoxes(bytes,view,trak),'mdia');if(!mdia)continue;
+    const mdiaChildren=childBoxes(bytes,view,mdia),hdlr=find(mdiaChildren,'hdlr'),minf=find(mdiaChildren,'minf');
+    if(!hdlr||typeAt(bytes,hdlr.dataStart+8)!=='vide'||!minf)continue;
+    const stbl=find(childBoxes(bytes,view,minf),'stbl'),stsd=stbl&&find(childBoxes(bytes,view,stbl),'stsd');if(!stsd)continue;
+    const count=view.getUint32(stsd.dataStart+4,false);let cursor=stsd.dataStart+8;
+    for(let index=0;index<count;index++){
+      const entry=boxesIn(bytes,view,cursor,stsd.end)[0];if(!entry)throw new Error('stsd 样本描述不完整。');cursor=entry.end;
+      if(!['avc1','avc3'].includes(entry.type)||entry.dataStart+78>entry.end)continue;
+      const avcC=find(childBoxes(bytes,view,entry,78),'avcC');if(!avcC||avcC.dataStart+6>avcC.end)continue;
+      bytes[avcC.dataStart+3]=level;
+      const spsCount=bytes[avcC.dataStart+5]&31;let spsCursor=avcC.dataStart+6;
+      for(let spsIndex=0;spsIndex<spsCount;spsIndex++){
+        if(spsCursor+2>avcC.end)throw new Error('avcC SPS 长度不完整。');
+        const size=view.getUint16(spsCursor,false);spsCursor+=2;
+        if(spsCursor+size>avcC.end)throw new Error('avcC SPS 内容不完整。');
+        if(size>=4&&(bytes[spsCursor]&31)===7)bytes[spsCursor+3]=level;
+        spsCursor+=size;
+      }
+      patched++;
+    }
+  }
+  if(!patched)throw new Error('MP4 缺少可更新的 H.264 avcC 配置。');
+  return bytes.byteOffset===0&&bytes.byteLength===bytes.buffer.byteLength?bytes.buffer:bytes.slice().buffer;
+}
+
+export function normalizeVideoTimescale(input,targetTimescale,{copy=true}={}){
+  if(!Number.isInteger(targetTimescale)||targetTimescale<=0)throw new Error('目标视频 timescale 无效。');
+  const original=asBytes(input),bytes=copy||original.byteOffset!==0||original.byteLength!==original.buffer.byteLength?original.slice():original;
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),topLevel=boxesIn(bytes,view,0,bytes.length),moov=find(topLevel,'moov');
+  if(!moov)throw new Error('MP4 缺少 moov。');
+  let normalized=0;
+  for(const trak of childBoxes(bytes,view,moov).filter(box=>box.type==='trak')){
+    const trakChildren=childBoxes(bytes,view,trak),mdia=find(trakChildren,'mdia');if(!mdia)continue;
+    const mdiaChildren=childBoxes(bytes,view,mdia),hdlr=find(mdiaChildren,'hdlr'),mdhd=find(mdiaChildren,'mdhd'),minf=find(mdiaChildren,'minf');
+    if(!hdlr||typeAt(bytes,hdlr.dataStart+8)!=='vide'||!mdhd||!minf)continue;
+    const media=fullBoxTime(view,mdhd),factor=targetTimescale/media.timescale;
+    if(!Number.isInteger(factor)||factor<1)throw new Error(`目标视频 timescale ${targetTimescale} 必须是原 timescale ${media.timescale} 的整数倍。`);
+    if(factor===1){normalized++;continue;}
+    const scaledDuration=media.duration*factor,version=view.getUint8(mdhd.dataStart);
+    view.setUint32(version===0?mdhd.dataStart+12:mdhd.dataStart+20,targetTimescale,false);
+    if(version===0){if(scaledDuration>0xffffffff)throw new Error('视频媒体时长超出 32-bit 范围。');view.setUint32(mdhd.dataStart+16,scaledDuration,false);}
+    else if(version===1)setU64(view,mdhd.dataStart+24,scaledDuration);
+    else throw new Error(`mdhd 使用了不支持的版本 ${version}。`);
+
+    const stbl=find(childBoxes(bytes,view,minf),'stbl');if(!stbl)throw new Error('MP4 视频轨缺少 stbl。');
+    const sampleBoxes=childBoxes(bytes,view,stbl),stts=find(sampleBoxes,'stts'),ctts=find(sampleBoxes,'ctts');
+    if(!stts)throw new Error('MP4 视频轨缺少 stts。');
+    const timingCount=view.getUint32(stts.dataStart+4,false);let cursor=stts.dataStart+8;
+    for(let index=0;index<timingCount;index++,cursor+=8){
+      if(cursor+8>stts.end)throw new Error('stts 内容不完整。');
+      const delta=view.getUint32(cursor+4,false)*factor;if(delta>0xffffffff)throw new Error('视频帧时长超出 32-bit 范围。');
+      view.setUint32(cursor+4,delta,false);
+    }
+    if(ctts){
+      const cttsVersion=view.getUint8(ctts.dataStart),count=view.getUint32(ctts.dataStart+4,false);cursor=ctts.dataStart+8;
+      for(let index=0;index<count;index++,cursor+=8){
+        if(cursor+8>ctts.end)throw new Error('ctts 内容不完整。');
+        const offset=(cttsVersion===0?view.getUint32(cursor+4,false):view.getInt32(cursor+4,false))*factor;
+        if(cttsVersion===0){if(offset>0xffffffff)throw new Error('视频合成偏移超出 32-bit 范围。');view.setUint32(cursor+4,offset,false);}
+        else if(cttsVersion===1){if(offset>0x7fffffff||offset<-(2**31))throw new Error('视频合成偏移超出 32-bit 范围。');view.setInt32(cursor+4,offset,false);}
+        else throw new Error(`ctts 使用了不支持的版本 ${cttsVersion}。`);
+      }
+    }
+    const edts=find(trakChildren,'edts'),elst=edts&&find(childBoxes(bytes,view,edts),'elst');
+    if(elst){
+      const editVersion=view.getUint8(elst.dataStart),count=view.getUint32(elst.dataStart+4,false),entrySize=editVersion===0?12:editVersion===1?20:0;
+      if(!entrySize)throw new Error(`elst 使用了不支持的版本 ${editVersion}。`);
+      cursor=elst.dataStart+8;
+      for(let index=0;index<count;index++,cursor+=entrySize){
+        if(cursor+entrySize>elst.end)throw new Error('elst 内容不完整。');
+        if(editVersion===0){const mediaTime=view.getInt32(cursor+4,false);if(mediaTime>=0){const scaled=mediaTime*factor;if(scaled>0x7fffffff)throw new Error('视频 edit list 超出 32-bit 范围。');view.setInt32(cursor+4,scaled,false);}}
+        else{const mediaTime=view.getBigInt64(cursor+8,false);if(mediaTime>=0n)view.setBigInt64(cursor+8,mediaTime*BigInt(factor),false);}
+      }
+    }
+    normalized++;
+  }
+  if(!normalized)throw new Error('MP4 缺少可规范化的 H.264 视频轨。');
+  return bytes.byteOffset===0&&bytes.byteLength===bytes.buffer.byteLength?bytes.buffer:bytes.slice().buffer;
 }
 
 export function inspectMp4(input){
@@ -203,15 +295,23 @@ export function trimMp4Presentation(input,durationSeconds,{copy=true}={}){
   return bytes.byteOffset===0&&bytes.byteLength===bytes.buffer.byteLength?bytes.buffer:bytes.slice().buffer;
 }
 
-export function validateSignalMp4(input,{width,height,fps,duration,includeAudio}){
+export function validateSignalMp4(input,{width,height,fps,duration,includeAudio,h264Level}){
   const result=inspectMp4(input);
   if(result.fragmented)throw new Error('导出的文件意外成为 fragmented MP4。');
   const video=result.tracks.find(track=>track.type==='video');
   if(!video||!['avc1','avc3'].includes(video.codec))throw new Error('MP4 缺少 H.264 视频轨。');
   if(video.width!==width||video.height!==height)throw new Error(`MP4 分辨率不正确：${video.width} × ${video.height}。`);
+  if(h264Level!==undefined&&video.avcLevel!==h264Level)throw new Error(`MP4 H.264 Level 不正确：预期 ${h264Level}，实际 ${video.avcLevel??'未知'}。`);
   const expectedFrames=Math.max(1,Math.ceil(duration*fps-1e-9));
   if(video.sampleCount!==expectedFrames)throw new Error(`MP4 视频帧数不正确：预期 ${expectedFrames}，实际 ${video.sampleCount}。`);
-  if(Math.abs(video.nominalRate-fps)>.02)throw new Error(`MP4 帧率不正确：预期 ${fps}，实际 ${video.nominalRate.toFixed(3)}。`);
+  // MP4 sample durations are integer ticks. At rates such as 165 FPS the
+  // 57.6 kHz video timescale represents each sample as 349 ticks, yielding
+  // 165.043 FPS even though the source timestamps are on the requested CFR
+  // grid. Accept that exact one-tick quantization (or an exact average rate),
+  // while still rejecting a genuinely different frame rate.
+  const quantizedRate=video.timescale/Math.max(1,Math.round(video.timescale/fps));
+  const rateError=Math.min(Math.abs(video.nominalRate-fps),Math.abs(video.nominalRate-quantizedRate),Math.abs(video.averageRate-fps));
+  if(rateError>.02)throw new Error(`MP4 帧率不正确：预期 ${fps}，实际 ${video.nominalRate.toFixed(3)}。`);
   const tolerance=Math.max(1e-4,1/(fps*100));
   if(Math.abs(video.presentationDurationSeconds-duration)>tolerance)throw new Error('MP4 视频时长不正确。');
   if(Math.abs(result.duration-duration)>tolerance)throw new Error('MP4 容器时长不正确。');

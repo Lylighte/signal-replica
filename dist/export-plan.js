@@ -1,10 +1,76 @@
 import {APP_CONFIG} from './config.js';
 
-export const EXPORT_ASPECTS=Object.freeze({
-  '16:9':Object.freeze({width:1920,height:1080}),
-  '4:3':Object.freeze({width:1440,height:1080})
+export const EXPORT_RESOLUTIONS=Object.freeze({
+  '1080p':Object.freeze({
+    '16:9':Object.freeze({width:1920,height:1080}),
+    '4:3':Object.freeze({width:1440,height:1080}),
+    '1:1':Object.freeze({width:1080,height:1080}),
+    '9:16':Object.freeze({width:1080,height:1920})
+  }),
+  '2k':Object.freeze({
+    '16:9':Object.freeze({width:2560,height:1440}),
+    '4:3':Object.freeze({width:1920,height:1440}),
+    '1:1':Object.freeze({width:1440,height:1440}),
+    '9:16':Object.freeze({width:1440,height:2560})
+  }),
+  '4k':Object.freeze({
+    '16:9':Object.freeze({width:3840,height:2160}),
+    '4:3':Object.freeze({width:2880,height:2160}),
+    '1:1':Object.freeze({width:2160,height:2160}),
+    '9:16':Object.freeze({width:2160,height:3840})
+  })
 });
-export const MP4_FRAME_RATES=Object.freeze([30,60]);
+export const MP4_FRAME_RATES=Object.freeze([30,60,90,120,144,165]);
+export const MP4_VIDEO_TIMESCALE=633600; // LCM of 57,600 and every supported FPS.
+export const VIDEO_QUALITY_PRESETS=Object.freeze({
+  compact:Object.freeze({label:'节省空间',factor:.65}),
+  balanced:Object.freeze({label:'均衡',factor:1}),
+  high:Object.freeze({label:'高画质',factor:1.45}),
+  maximum:Object.freeze({label:'最高画质',factor:2})
+});
+
+const AVC_LEVELS=Object.freeze([
+  Object.freeze({code:'28',maxFrameMacroblocks:8192,maxMacroblocksPerSecond:245760,maxBitrate:25_000_000}),
+  Object.freeze({code:'29',maxFrameMacroblocks:8192,maxMacroblocksPerSecond:245760,maxBitrate:62_500_000}),
+  Object.freeze({code:'2a',maxFrameMacroblocks:8704,maxMacroblocksPerSecond:522240,maxBitrate:62_500_000}),
+  Object.freeze({code:'32',maxFrameMacroblocks:22080,maxMacroblocksPerSecond:589824,maxBitrate:168_750_000}),
+  Object.freeze({code:'33',maxFrameMacroblocks:36864,maxMacroblocksPerSecond:983040,maxBitrate:300_000_000}),
+  Object.freeze({code:'34',maxFrameMacroblocks:36864,maxMacroblocksPerSecond:2073600,maxBitrate:300_000_000}),
+  Object.freeze({code:'3c',maxFrameMacroblocks:139264,maxMacroblocksPerSecond:4177920,maxBitrate:300_000_000}),
+  Object.freeze({code:'3d',maxFrameMacroblocks:139264,maxMacroblocksPerSecond:8355840,maxBitrate:600_000_000}),
+  Object.freeze({code:'3e',maxFrameMacroblocks:139264,maxMacroblocksPerSecond:16711680,maxBitrate:1_000_000_000})
+]);
+
+export function getExportResolution(aspect,quality='1080p'){
+  const tier=EXPORT_RESOLUTIONS[quality];
+  if(!tier)throw new Error('导出分辨率无效。');
+  const resolution=tier[aspect];
+  if(!resolution)throw new Error('画面比例无效。');
+  return resolution;
+}
+
+export function getMp4VideoEncoding({width,height,fps,qualityPreset='balanced',videoBitrate}){
+  if(!Object.hasOwn(VIDEO_QUALITY_PRESETS,qualityPreset)&&qualityPreset!=='custom')throw new Error('视频画质预设无效。');
+  const pixelScale=width*height/(1920*1080),rateScale=Math.sqrt(fps/30);
+  const automatic=12_000_000*pixelScale*rateScale*(VIDEO_QUALITY_PRESETS[qualityPreset]?.factor??1);
+  const bitrate=qualityPreset==='custom'?Number(videoBitrate):Math.round(Math.min(300_000_000,automatic));
+  if(!Number.isInteger(bitrate)||bitrate<1_000_000||bitrate>1_000_000_000)throw new Error('自定义视频码率需为 1–1000 Mbps 的整数。');
+  const frameMacroblocks=Math.ceil(width/16)*Math.ceil(height/16),macroblocksPerSecond=frameMacroblocks*fps;
+  const level=AVC_LEVELS.find(item=>frameMacroblocks<=item.maxFrameMacroblocks&&macroblocksPerSecond<=item.maxMacroblocksPerSecond&&bitrate<=item.maxBitrate);
+  if(!level)throw new Error('当前分辨率与帧率超出了 H.264 Level 6.2 的范围。');
+  return Object.freeze({bitrate,qualityPreset,codec:`avc1.6400${level.code}`,h264Level:Number.parseInt(level.code,16)});
+}
+
+export function estimateExportLoad({width,height,fps,duration,bitrate}){
+  const frameCount=Math.max(1,Math.ceil(duration*fps-1e-9));
+  const workingSetBytes=width*height*4*4;
+  const estimatedFileBytes=Math.ceil(duration*bitrate/8);
+  const score=width*height*fps;
+  const warning=score>3840*2160*60
+    ?'这是超高负载组合。导出会严格使用所选规格，可能耗时很久或因设备内存、显存及编码器限制而失败。'
+    :score>2560*1440*60?'这是高负载组合，请确保设备有足够内存并避免同时运行其他图形任务。':'';
+  return Object.freeze({frameCount,workingSetBytes,estimatedFileBytes,score,warning});
+}
 
 export class ExportCancelledError extends Error{
   constructor(message='导出已取消。'){super(message);this.name='AbortError';}
@@ -21,11 +87,10 @@ export function validateExportRange({start,end,allowStill=false,duration=APP_CON
   return{start,end,duration:end-start};
 }
 
-export function createMp4ExportPlan({start,end,fps,aspect,duration=APP_CONFIG.duration}){
+export function createMp4ExportPlan({start,end,fps,aspect,quality='1080p',duration=APP_CONFIG.duration,qualityPreset='balanced',videoBitrate}){
   const range=validateExportRange({start,end,duration});
-  if(!MP4_FRAME_RATES.includes(fps))throw new Error('MP4 帧率仅支持 30 或 60 FPS。');
-  const resolution=EXPORT_ASPECTS[aspect];
-  if(!resolution)throw new Error('画面比例无效。');
+  if(!MP4_FRAME_RATES.includes(fps))throw new Error(`MP4 帧率仅支持 ${MP4_FRAME_RATES.join('、')} FPS。`);
+  const resolution=getExportResolution(aspect,quality),encoding=getMp4VideoEncoding({...resolution,fps,qualityPreset,videoBitrate});
   const frameCount=Math.max(1,Math.ceil(range.duration*fps-1e-9));
   const frames=Array.from({length:frameCount},(_,index)=>{
     const timestamp=index/fps;
@@ -34,8 +99,10 @@ export function createMp4ExportPlan({start,end,fps,aspect,duration=APP_CONFIG.du
     // final encoded sample can quantize it to zero in WebCodecs/muxers.
     return{index,sourceTime:start+timestamp,timestamp,duration:1/fps};
   });
+  const load=estimateExportLoad({...resolution,fps,duration:range.duration,bitrate:encoding.bitrate});
   return Object.freeze({
-    ...range,...resolution,aspect,fps,frameCount,
+    ...range,...resolution,...encoding,aspect,quality,fps,frameCount,
+    load,
     frames:Object.freeze(frames.map(Object.freeze))
   });
 }
