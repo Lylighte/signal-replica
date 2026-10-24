@@ -21,3 +21,10 @@ test('studio exposes functional editors for all project feature groups',()=>{
   for(const id of ['studio-tabs','display-mode','layout-mode','duration-total','keyframe-track','theme-select','number-font-file','audio-file','beat-subdivision','layers-list','template-select','share-create','batch-add-variants'])assert.match(html,new RegExp(`id="${id}"`));
   assert.match(html,/layers\.selected\.x/);assert.match(html,/effects\.glitchStrength/);
 });
+
+test('preview audio starts enabled while retaining an explicit mute control',()=>{
+  assert.match(html,/id="sound"[^>]*aria-pressed="true"[^>]*>声音开启<\/button>/);
+  assert.match(html,/<audio id="soundtrack" src="assets\/audio\.wav"/);
+  assert.match(studio,/playing:false,sound:true,ready:false/);
+  assert.match(studio,/if\(state\.sound\)\{syncAudioToProjectTime/);
+});
