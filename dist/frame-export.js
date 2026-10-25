@@ -1,7 +1,7 @@
 import {APP_CONFIG} from './config.js';
 import {previewIssue} from './editor-data.js';
 import {createExportRenderer} from './render-export.js';
-import {getExportResolution} from './export-plan.js';
+import {MAX_BUFFERED_EXPORT_BYTES,assertRasterResourceBudget,getExportResolution} from './export-plan.js';
 import {waitForFontsReady} from './font-manager.js';
 
 const MAX_FRAMES=5000;
@@ -34,17 +34,18 @@ const frameName=index=>`frames/frame_${String(index).padStart(6,'0')}.png`;
 export async function exportFrameZip({options,design,view,selectedId,aspect,quality='1080p',framing='crop',project,runtimeAssets,duration=project?.timeline?.duration??APP_CONFIG.duration,start,end,fps,onProgress=()=>{},isCancelled=()=>false,signal}){
   if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||end>duration)throw new Error(`时间范围需在 0–${duration.toFixed(2)} 秒内，并且起点不晚于终点。`);
   if(!Number.isInteger(fps)||fps<1||fps>165)throw new Error('帧率需为 1–165 的整数。');
-  getExportResolution(aspect,quality);
+  const resolution=getExportResolution(aspect,quality);
   const issue=previewIssue(design);if(issue)throw new Error(issue);
   const frameCount=Math.floor((end-start)*fps+1e-9)+1;
   if(frameCount>MAX_FRAMES)throw new Error(`单次导出最多 ${MAX_FRAMES} 帧，请缩短时间范围或降低帧率。`);
+  assertRasterResourceBudget({...resolution,frameCount,label:'PNG ZIP'});
   if(project?.typography)await waitForFontsReady(document.fonts,{families:[project.typography.number?.family,project.typography.text?.family].filter(Boolean),signal});
   if(isCancelled()||signal?.aborted)return null;
   const frameRenderer=createExportRenderer({design,aspect,quality,framing,project,runtimeAssets}),{canvas:output,width,height}=frameRenderer;
   const rows=[],parts=[];let localOffset=0;
   const addFile=async(name,blob)=>{
     const bytes=new Uint8Array(await blob.arrayBuffer()),crc=crc32(bytes),{header,filename}=zipHeader(name,crc,bytes.length);
-    if(localOffset+header.length+filename.length+bytes.length>0xffffffff)throw new Error('ZIP 文件超出浏览器支持的大小，请缩短导出时长或降低帧率。');
+    if(localOffset+header.length+filename.length+bytes.length>Math.min(0xffffffff,MAX_BUFFERED_EXPORT_BYTES))throw new Error('ZIP 预计会占用超过 1 GiB 浏览器内存，请缩短导出时长、降低帧率或降低分辨率。');
     parts.push(header,filename,blob);rows.push({name,crc,size:bytes.length,offset:localOffset});localOffset+=header.length+filename.length+bytes.length;
   };
   try{

@@ -2,6 +2,7 @@ import {APP_CONFIG,MOTION} from './config.js';
 import {DEFAULT_DESIGN,validateDesign} from './design.js';
 import {ScreenCurve} from './screen-curve.js';
 import {createCanvasColorStyle} from './themes.js';
+import {SignalDistortion} from './signal-distortion.js';
 export const WIDTH=1920, HEIGHT=1080;
 export const VIEWPORTS=Object.freeze({
   '16:9':Object.freeze({width:1920,height:1080}),
@@ -204,6 +205,8 @@ export class SignalRenderer {
   setDesign(patch){
     this.design=validateDesign(patch,this.design);this.glyphs.clear();this.labels.clear();
     const design=this.design,grey=value=>`rgb(${Math.round(value*255)},${Math.round(value*255)},${Math.round(value*255)})`;
+    if(this.vignette){this.vignette.width=1;this.vignette.height=1;}
+    if(this.scanlines){this.scanlines.width=1;this.scanlines.height=1;}
     // One fixed light field across the whole canvas. Multiplication preserves black.
     this.vignette=makeCanvas(this.canvas.width,this.canvas.height);
     const light=this.mapContext(this.vignette.getContext('2d'));
@@ -219,6 +222,7 @@ export class SignalRenderer {
     for(let y=0;y<this.logicalHeight;y+=design.scanLineSpacing)scan.fillRect(0,y,this.logicalWidth,Math.min(design.scanLineWidth,design.scanLineSpacing-1));
     if(this.noiseTexture){this.noiseTexture.width=1;this.noiseTexture.height=1;}
     this.noiseTexture=null;this.noiseSeed=-1;
+    this.signalDistortion??=new SignalDistortion(this.canvas.width,this.canvas.height);
   }
   glyph(digit){
     if(this.glyphs.has(digit))return this.glyphs.get(digit);
@@ -412,11 +416,13 @@ export class SignalRenderer {
     output.drawImage(this.scanlines,0,0);
     if(typeof scene.drawLayers==='function')scene.drawLayers({ctx:output,time,pixelWidth:this.canvas.width,pixelHeight:this.canvas.height,mapping:this.mapping});
     const flash=clamp(Number(effect.flash)||0,0,1);if(flash){output.fillStyle=`rgba(255,255,255,${flash*.42})`;output.fillRect(0,0,this.canvas.width,this.canvas.height);}
+    this.signalDistortion.apply(this.canvas,output,t,design,entranceGlitch,this.pixelScale);
     if(t>MOTION.fadeStart){output.fillStyle=`rgba(0,0,0,${smooth((t-MOTION.fadeStart)/.12)})`;output.fillRect(0,0,this.canvas.width,this.canvas.height);}
     this.curvatureSupported=design.screenCurve!=='curved'||this.screenCurve.apply(this.canvas,output,design.screenCurvature);
   }
   dispose(){
     this.screenCurve.dispose();
+    this.signalDistortion?.dispose();
     for(const canvas of [this.canvas,this.frame,this.compressed,this.softened,this.vignette,this.scanlines,this.noiseTexture,...this.glyphs.values(),...this.labels.values()]){
       if(canvas){canvas.width=1;canvas.height=1;}
     }

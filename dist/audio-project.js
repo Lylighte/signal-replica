@@ -7,6 +7,8 @@
  */
 
 export const AUDIO_FILE_ACCEPT='audio/*,.mp3,.wav,.wave,.flac,.m4a,.aac,.ogg,.opus,.webm';
+export const MAX_LOCAL_AUDIO_BYTES=128*1024*1024;
+export const MAX_DECODED_AUDIO_BYTES=512*1024*1024;
 export const DEFAULT_AUDIO_CLIP=Object.freeze({
   volume:1,
   muted:false,
@@ -41,6 +43,7 @@ function assertAudioBuffer(audioBuffer){
     const data=audioBuffer.getChannelData(channel);
     if(!data||data.length<audioBuffer.length)throw new Error('AudioBuffer 声道数据不完整。');
   }
+  if(audioBuffer.length*audioBuffer.numberOfChannels*4>MAX_DECODED_AUDIO_BYTES)throw new Error('解码后的音频超过 512 MiB，请缩短音轨或使用更低采样率/声道数。');
   return audioBuffer;
 }
 
@@ -56,6 +59,7 @@ export function inspectBrowserAudioFile(file){
     throw new Error('请选择浏览器可解码的音频文件（例如 MP3、WAV 或 FLAC）。');
   }
   if(Number.isFinite(file.size)&&file.size<=0)throw new Error('所选音频文件为空。');
+  if(Number.isFinite(file.size)&&file.size>MAX_LOCAL_AUDIO_BYTES)throw new Error('单个音频文件不能超过 128 MiB。');
   return Object.freeze({name,type:type||'application/octet-stream',extension,size:Number(file.size)||0});
 }
 

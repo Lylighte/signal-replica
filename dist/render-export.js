@@ -4,15 +4,28 @@ import {getExportResolution} from './export-plan.js';
 import {createProjectSceneFactory} from './project-runtime.js';
 import {findMissingImageLayers} from './layers.js';
 
+const MAX_EXPLICIT_RENDER_PIXELS=3840*2160;
+
 export function assertProjectImageAssets(project,runtimeAssets={}){
   const missing=findMissingImageLayers(project?.layers??[],{images:runtimeAssets?.images});
   if(missing.length)throw new Error(`图片图层缺少本地文件：${missing.map(layer=>`“${layer.name||layer.id}”`).join('、')}。请重新选择图片后再导出。`);
   return true;
 }
 
-export function createExportRenderer({design,aspect,quality='1080p',framing='crop',project,runtimeAssets}={}){
+export function resolveRenderResolution(aspect,quality='1080p',resolution){
+  if(resolution===undefined)return getExportResolution(aspect,quality);
+  if(!resolution||typeof resolution!=='object'||Array.isArray(resolution))throw new Error('显式导出分辨率无效。');
+  const width=Number(resolution.width),height=Number(resolution.height);
+  if(!Number.isInteger(width)||!Number.isInteger(height)||width<1||height<1)throw new Error('显式导出分辨率的宽高必须为正整数。');
+  if(width*height>MAX_EXPLICIT_RENDER_PIXELS)throw new Error('显式导出分辨率超过 4K 安全上限。');
+  // Validate the logical viewport independently from the requested raster size.
+  getExportResolution(aspect,'1080p');
+  return Object.freeze({width,height});
+}
+
+export function createExportRenderer({design,aspect,quality='1080p',resolution,framing='crop',project,runtimeAssets}={}){
   if(project)assertProjectImageAssets(project,runtimeAssets);
-  const {width,height}=getExportResolution(aspect,quality);
+  const {width,height}=resolveRenderResolution(aspect,quality,resolution);
   const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
   const renderer=new SignalRenderer(canvas,{aspect,framing});
   const exportProject=project?{

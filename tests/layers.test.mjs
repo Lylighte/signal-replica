@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {drawLayer,drawLayers,findMissingImageLayers,layerEnvelope,normalizeLayer,normalizeLayers,resolveLayerAtTime,resolveLayerGeometry,sortLayers} from '../dist/layers.js';
+import {MAX_LAYER_IMAGE_BYTES,assertLayerImageDimensions,drawLayer,drawLayers,findMissingImageLayers,inspectLayerImageFile,layerEnvelope,normalizeLayer,normalizeLayers,resolveLayerAtTime,resolveLayerGeometry,sortLayers} from '../dist/layers.js';
 import {assertProjectImageAssets} from '../dist/render-export.js';
 
 test('text and image layers are normalized without retaining file objects',()=>{
@@ -9,6 +9,15 @@ test('text and image layers are normalized without retaining file objects',()=>{
   const image=normalizeLayer({id:'logo',type:'image',assetId:'asset-1',fit:'cover'});
   assert.equal(image.assetId,'asset-1');assert.equal(image.fit,'cover');assert.equal(Object.hasOwn(image,'file'),false);
   assert.throws(()=>normalizeLayers([{id:'same',type:'text'},{id:'same',type:'image'}]),/重复/);
+});
+
+test('image assets are rejected before decoding when byte or pixel budgets are unsafe',()=>{
+  const file={name:'logo.png',type:'image/png',size:1024,arrayBuffer:async()=>new ArrayBuffer(0)};
+  assert.equal(inspectLayerImageFile(file).name,'logo.png');
+  assert.throws(()=>inspectLayerImageFile({...file,size:MAX_LAYER_IMAGE_BYTES+1}),/64 MiB/);
+  assert.deepEqual(assertLayerImageDimensions({naturalWidth:4096,naturalHeight:4096}),{width:4096,height:4096,pixels:4096**2});
+  assert.throws(()=>assertLayerImageDimensions({naturalWidth:16385,naturalHeight:1}),/像素尺寸过大/);
+  assert.throws(()=>assertLayerImageDimensions({naturalWidth:10000,naturalHeight:10000}),/像素尺寸过大/);
 });
 
 test('layer sorting is stable and does not modify the caller array',()=>{

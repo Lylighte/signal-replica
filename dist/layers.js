@@ -1,4 +1,7 @@
 export const MAX_LAYERS=64;
+export const MAX_LAYER_IMAGE_BYTES=64*1024*1024;
+export const MAX_LAYER_IMAGE_PIXELS=64*1024*1024;
+export const MAX_LAYER_IMAGE_DIMENSION=16384;
 export const LAYER_TYPES=Object.freeze(['text','image']);
 export const LAYER_BLEND_MODES=Object.freeze(['source-over','lighter','screen','multiply','overlay','soft-light','hard-light','difference','exclusion']);
 export const LAYER_MASKS=Object.freeze(['none','rect','rounded','circle']);
@@ -9,6 +12,22 @@ const clamp=(value,min,max)=>Math.max(min,Math.min(max,value));
 const text=(value,fallback='',limit=2000)=>String(value??fallback).slice(0,limit);
 const choice=(value,allowed,fallback)=>allowed.includes(value)?value:fallback;
 const colour=(value,fallback)=>typeof value==='string'&&value.trim()?value.trim().slice(0,256):fallback;
+
+export function inspectLayerImageFile(file){
+  const name=String(file?.name??''),extension=name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1],type=String(file?.type??'');
+  if(!file||typeof file.arrayBuffer!=='function'||(!/^image\/(?:png|jpeg|webp|svg\+xml)$/i.test(type)&&!['png','jpg','jpeg','webp','svg'].includes(extension)))throw new Error('图片图层仅支持 PNG、JPEG、WebP 或 SVG。');
+  const size=Number(file.size);
+  if(!Number.isFinite(size)||size<=0)throw new Error('图片文件为空或大小无效。');
+  if(size>MAX_LAYER_IMAGE_BYTES)throw new Error('单个图片文件不能超过 64 MiB。');
+  return Object.freeze({name:name.split(/[\\/]/).at(-1).slice(0,180),type:type||'application/octet-stream',size});
+}
+
+export function assertLayerImageDimensions(image){
+  const width=Number(image?.naturalWidth??image?.width),height=Number(image?.naturalHeight??image?.height);
+  if(!Number.isInteger(width)||width<1||!Number.isInteger(height)||height<1)throw new Error('图片尺寸无效。');
+  if(width>MAX_LAYER_IMAGE_DIMENSION||height>MAX_LAYER_IMAGE_DIMENSION||width*height>MAX_LAYER_IMAGE_PIXELS)throw new Error('图片像素尺寸过大，请缩小到 16384 像素以内且总像素不超过 64 MP。');
+  return Object.freeze({width,height,pixels:width*height});
+}
 
 function normalizeAnimation(value={},fallbackType='fade'){
   if(value===false||value==='none')return {type:'none',duration:0,offset:0,distance:0,scale:.8,easing:'easeInOut'};

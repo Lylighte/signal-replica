@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {EXPORT_RESOLUTIONS,MP4_FRAME_RATES,MP4_VIDEO_TIMESCALE,createMp4ExportPlan,getAudioSampleRange,getExportResolution,runCancellableExport} from '../dist/export-plan.js';
+import {EXPORT_RESOLUTIONS,MP4_FRAME_RATES,MP4_VIDEO_TIMESCALE,MAX_MP4_EXPORT_FRAMES,assertRasterResourceBudget,createMp4ExportPlan,getAudioSampleRange,getExportResolution,runCancellableExport} from '../dist/export-plan.js';
 import {inspectMp4,normalizeVideoTimescale,patchAvcLevel,trimMp4Presentation,validateSignalMp4} from '../dist/mp4-inspect.js';
 import {checkMp4ExportSupport} from '../dist/video-export.js';
 
@@ -66,6 +66,13 @@ test('MP4 plan supports six FPS values and every resolution/aspect combination',
   assert.throws(()=>createMp4ExportPlan({start:0,end:1,fps:30,aspect:'16:9',quality:'8k'}),/分辨率/);
   assert.equal(createMp4ExportPlan({start:0,end:1,fps:60,aspect:'16:9'}).codec,'avc1.64002a');
   assert.equal(createMp4ExportPlan({start:0,end:1,fps:165,aspect:'16:9',quality:'4k'}).codec,'avc1.64003d');
+});
+
+test('export plans reject unsafe buffered workloads before allocating frame arrays or canvases',()=>{
+  assert.throws(()=>createMp4ExportPlan({start:0,end:3600,duration:3600,fps:165,aspect:'16:9',quality:'4k',qualityPreset:'maximum'}),/(1 GiB|最多编码)/);
+  assert.ok(MAX_MP4_EXPORT_FRAMES>165,'ordinary high frame-rate clips remain supported');
+  assert.doesNotThrow(()=>assertRasterResourceBudget({width:3840,height:2160,frameCount:600,label:'PNG ZIP'}));
+  assert.throws(()=>assertRasterResourceBudget({width:3840,height:2160,frameCount:1000,label:'PNG ZIP'}),/像素总量过高/);
 });
 
 test('MP4 timeline is half-open and gives every encoded sample a full frame duration',()=>{

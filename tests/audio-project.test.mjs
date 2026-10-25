@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  MAX_LOCAL_AUDIO_BYTES,
   createManagedAudioAsset,
   decodeBrowserAudioFile,
   getAudioPlaybackState,
@@ -73,6 +74,7 @@ test('audio rendering exposes an AbortError and stops before allocating when alr
 
 test('browser decoder reports unsupported files clearly and always closes its temporary context',async()=>{
   assert.throws(()=>inspectBrowserAudioFile({name:'notes.txt',type:'text/plain',size:3,arrayBuffer:async()=>new ArrayBuffer(3)}),/MP3、WAV 或 FLAC/);
+  assert.throws(()=>inspectBrowserAudioFile({name:'huge.wav',type:'audio/wav',size:MAX_LOCAL_AUDIO_BYTES+1,arrayBuffer:async()=>new ArrayBuffer(0)}),/128 MiB/);
   let closes=0;
   class FakeContext{
     decodeAudioData(_bytes,success){queueMicrotask(()=>success(makeBuffer()));}

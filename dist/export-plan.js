@@ -22,6 +22,9 @@ export const EXPORT_RESOLUTIONS=Object.freeze({
 });
 export const MP4_FRAME_RATES=Object.freeze([30,60,90,120,144,165]);
 export const MP4_VIDEO_TIMESCALE=633600; // LCM of 57,600 and every supported FPS.
+export const MAX_MP4_EXPORT_FRAMES=120_000;
+export const MAX_BUFFERED_EXPORT_BYTES=1024*1024*1024;
+export const MAX_RASTER_PIXEL_FRAMES=5_000_000_000;
 export const VIDEO_QUALITY_PRESETS=Object.freeze({
   compact:Object.freeze({label:'节省空间',factor:.65}),
   balanced:Object.freeze({label:'均衡',factor:1}),
@@ -63,13 +66,29 @@ export function getMp4VideoEncoding({width,height,fps,qualityPreset='balanced',v
 
 export function estimateExportLoad({width,height,fps,duration,bitrate}){
   const frameCount=Math.max(1,Math.ceil(duration*fps-1e-9));
-  const workingSetBytes=width*height*4*4;
+  // Renderer, curve/effect scratch canvases and encoder input can coexist.
+  const workingSetBytes=width*height*4*8;
   const estimatedFileBytes=Math.ceil(duration*bitrate/8);
+  const estimatedResidentBytes=workingSetBytes+estimatedFileBytes;
   const score=width*height*fps;
   const warning=score>3840*2160*60
     ?'这是超高负载组合。导出会严格使用所选规格，可能耗时很久或因设备内存、显存及编码器限制而失败。'
     :score>2560*1440*60?'这是高负载组合，请确保设备有足够内存并避免同时运行其他图形任务。':'';
-  return Object.freeze({frameCount,workingSetBytes,estimatedFileBytes,score,warning});
+  return Object.freeze({frameCount,workingSetBytes,estimatedFileBytes,estimatedResidentBytes,score,warning});
+}
+
+export function assertMp4ResourceBudget(load){
+  if(!load||!Number.isFinite(load.frameCount)||!Number.isFinite(load.estimatedResidentBytes))throw new Error('无法估算 MP4 导出资源。');
+  if(load.frameCount>MAX_MP4_EXPORT_FRAMES)throw new Error(`MP4 单次最多编码 ${MAX_MP4_EXPORT_FRAMES} 帧，请缩短时间范围或降低帧率。`);
+  if(load.estimatedResidentBytes>MAX_BUFFERED_EXPORT_BYTES)throw new Error('预计 MP4 导出会占用超过 1 GiB 浏览器内存，请缩短时间范围、降低分辨率/帧率或码率。');
+  return load;
+}
+
+export function assertRasterResourceBudget({width,height,frameCount,label='图像序列'}){
+  if(!Number.isInteger(width)||width<1||!Number.isInteger(height)||height<1||!Number.isInteger(frameCount)||frameCount<1)throw new Error(`${label}资源参数无效。`);
+  const pixelFrames=width*height*frameCount;
+  if(pixelFrames>MAX_RASTER_PIXEL_FRAMES)throw new Error(`${label}像素总量过高，请缩短时间范围、降低帧率或降低分辨率。`);
+  return Object.freeze({width,height,frameCount,pixelFrames});
 }
 
 export class ExportCancelledError extends Error{
@@ -92,6 +111,7 @@ export function createMp4ExportPlan({start,end,fps,aspect,quality='1080p',durati
   if(!MP4_FRAME_RATES.includes(fps))throw new Error(`MP4 帧率仅支持 ${MP4_FRAME_RATES.join('、')} FPS。`);
   const resolution=getExportResolution(aspect,quality),encoding=getMp4VideoEncoding({...resolution,fps,qualityPreset,videoBitrate});
   const frameCount=Math.max(1,Math.ceil(range.duration*fps-1e-9));
+  const load=assertMp4ResourceBudget(estimateExportLoad({...resolution,fps,duration:range.duration,bitrate:encoding.bitrate}));
   const frames=Array.from({length:frameCount},(_,index)=>{
     const timestamp=index/fps;
     // Keep encoded samples on a complete CFR grid. The MP4 presentation/edit
@@ -99,7 +119,6 @@ export function createMp4ExportPlan({start,end,fps,aspect,quality='1080p',durati
     // final encoded sample can quantize it to zero in WebCodecs/muxers.
     return{index,sourceTime:start+timestamp,timestamp,duration:1/fps};
   });
-  const load=estimateExportLoad({...resolution,fps,duration:range.duration,bitrate:encoding.bitrate});
   return Object.freeze({
     ...range,...resolution,...encoding,aspect,quality,fps,frameCount,
     load,

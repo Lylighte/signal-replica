@@ -4,7 +4,7 @@ import {BUILTIN_THEMES,THEME_COLOR_KEYS,importCustomTheme,normalizeTheme,seriali
 import {BUILT_IN_TEMPLATES,addCustomTemplate,applyTemplate,createTemplateFromProject,deleteCustomTemplate,duplicateTemplate,exportTemplate,importTemplate,loadCustomTemplates,saveCustomTemplates} from './templates.js';
 import {createShareUrl,decodeShareFragment,SHARE_FRAGMENT_PREFIX} from './share-config.js';
 import {normalizeLayer} from './layers.js';
-import {BatchExportQueue} from './batch-export.js';
+import {BatchExportQueue,createBatchExportInput} from './batch-export.js';
 
 const $=id=>document.getElementById(id);
 const value=id=>$(id)?.value;
@@ -13,6 +13,17 @@ const download=(data,name,type='application/json')=>{
   const blob=data instanceof Blob?data:new Blob([data],{type}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
 };
 const report=message=>{if($('form-status'))$('form-status').textContent=message;};
+
+export function createLayerListButton(layer,{selected=false,onSelect,documentRef=globalThis.document}={}){
+  if(!documentRef?.createElement)throw new Error('当前环境无法创建图层控件。');
+  const button=documentRef.createElement('button'),identity=documentRef.createElement('span'),order=documentRef.createElement('span');
+  button.type='button';button.className=`layer-item${selected?' is-selected':''}`;
+  identity.textContent=`${layer?.type==='text'?'T':'▧'} · ${String(layer?.name??'')}`;
+  order.textContent=String(layer?.zIndex??'');
+  button.replaceChildren(identity,order);
+  if(typeof onSelect==='function')button.onclick=onSelect;
+  return button;
+}
 
 export async function initStudioFeatures(app=window.ReplicaApp){
   if(!app)throw new Error('SIGNAL Studio 主控制器尚未就绪。');
@@ -93,7 +104,7 @@ export async function initStudioFeatures(app=window.ReplicaApp){
   function renderBeatMarkers(){const host=$('beat-markers');host.replaceChildren();if(!project.beat.enabled)return;for(const marker of getBeatMarkers({start:0,end:project.timeline.duration,bpm:project.beat.bpm,offset:project.beat.offset,subdivision:project.beat.subdivision})){const line=document.createElement('span');line.className=`beat-marker${marker.major?' major':''}`;line.style.left=`${marker.time/project.timeline.duration*100}%`;line.title=`${marker.time.toFixed(3)} s`;host.append(line);}}
 
   function selectedLayer(){return project.layers.find(layer=>layer.id===selectedLayerId);}
-  function renderLayers(){const host=$('layers-list');host.replaceChildren();for(const layer of project.layers){const button=document.createElement('button');button.type='button';button.className=`layer-item${layer.id===selectedLayerId?' is-selected':''}`;button.innerHTML=`<span>${layer.type==='text'?'T':'▧'} · ${layer.name}</span><span>${layer.zIndex}</span>`;button.onclick=()=>{selectedLayerId=layer.id;renderLayers();reflectLayer();};host.append(button);}if(!selectedLayerId&&project.layers[0]){selectedLayerId=project.layers[0].id;renderLayers();reflectLayer();}}
+  function renderLayers(){const host=$('layers-list');host.replaceChildren();for(const layer of project.layers){const button=createLayerListButton(layer,{selected:layer.id===selectedLayerId,onSelect:()=>{selectedLayerId=layer.id;renderLayers();reflectLayer();}});host.append(button);}if(!selectedLayerId&&project.layers[0]){selectedLayerId=project.layers[0].id;renderLayers();reflectLayer();}}
   function reflectLayer(){const layer=selectedLayer();if(!layer)return;$('layer-type').value=layer.type;$('layer-text').value=layer.text??'';$('layer-color').value=typeof layer.fill==='string'?layer.fill:'#ffffff';$('layer-font-size').value=layer.fontSize??72;$('layer-x').value=layer.x;$('layer-y').value=layer.y;$('layer-width').value=layer.width;$('layer-height').value=layer.height;$('layer-rotation').value=layer.rotation;$('layer-opacity').value=layer.opacity;$('layer-z').value=layer.zIndex;$('layer-blend').value=layer.blendMode;$('layer-mask').value=layer.mask.type;$('layer-glow').value=layer.glow.blur;$('layer-enter').value=layer.enter.type;$('layer-enter-duration').value=layer.enter.duration;$('layer-exit').value=layer.exit.type;$('layer-exit-duration').value=layer.exit.duration;}
   const layerPatch=()=>{const current=selectedLayer();if(!current)return null;return normalizeLayer({...current,type:value('layer-type'),text:value('layer-text'),fill:value('layer-color'),fontSize:number('layer-font-size'),x:number('layer-x'),y:number('layer-y'),width:number('layer-width'),height:number('layer-height'),rotation:number('layer-rotation'),opacity:number('layer-opacity'),zIndex:number('layer-z'),blendMode:value('layer-blend'),mask:{...current.mask,type:value('layer-mask')},glow:{...current.glow,enabled:number('layer-glow')>0,blur:number('layer-glow')},enter:{...current.enter,type:value('layer-enter'),duration:number('layer-enter-duration')},exit:{...current.exit,type:value('layer-exit'),duration:number('layer-exit-duration')}});};
   for(const id of ['layer-type','layer-text','layer-color','layer-font-size','layer-x','layer-y','layer-width','layer-height','layer-rotation','layer-opacity','layer-z','layer-blend','layer-mask','layer-glow','layer-enter','layer-enter-duration','layer-exit','layer-exit-duration'])$(id).addEventListener('change',()=>safe(()=>{const layer=layerPatch();if(!layer)return;update({layers:project.layers.map(item=>item.id===layer.id?layer:item)},'图层已更新。');}));
@@ -117,8 +128,7 @@ export async function initStudioFeatures(app=window.ReplicaApp){
 
   const queue=new BatchExportQueue({concurrency:1,exporter:async(input,{signal,onProgress})=>app.exportVideo({...input,signal,onProgress:(percent,message)=>{onProgress(percent,100);report(message);}}),onUpdate:()=>renderBatch()});
   function renderBatch(){const host=$('batch-list');host.replaceChildren();for(const task of queue.list()){const row=document.createElement('div');row.className='batch-item';const label=document.createElement('span');label.textContent=`${task.label||task.id} · ${task.status}${task.error?` · ${task.error}`:''}`;const progress=document.createElement('progress');progress.className='batch-progress';progress.max=1;progress.value=task.progress;row.append(label,progress);host.append(row);}}
-  const batchInput=source=>{const settings=source.export;return{project:structuredClone(source),options:source.options,design:source.design,view:source.preview.view,selectedId:source.preview.selectedId,aspect:settings.aspect,framing:source.preview.framing,quality:settings.quality,qualityPreset:settings.bitrateMode==='custom'?'custom':settings.qualityPreset,videoBitrate:settings.videoBitrate,duration:source.timeline.duration,start:0,end:source.timeline.duration,fps:settings.fps,includeAudio:settings.includeAudio,audioSource:source.audio.source,audioSettings:source.audio};};
-  const enqueueProject=(source,label)=>queue.addTask(batchInput(source),{label,fileNameTemplate:value('batch-filename'),metadata:{label,value:source.options.find(item=>item.id===source.preview.selectedId)?.value??source.options[0]?.value}});
+  const enqueueProject=(source,label)=>queue.addTask(createBatchExportInput(source,{audioBuffer:source.audio.source==='custom'?app.getCustomAudioBuffer?.()??null:null}),{label,fileNameTemplate:value('batch-filename'),metadata:{label,value:source.options.find(item=>item.id===source.preview.selectedId)?.value??source.options[0]?.value}});
   $('batch-add').onclick=()=>safe(()=>{refreshProject();const label=project.options.find(item=>item.id===project.preview.selectedId)?.label??project.meta.name;enqueueProject(project,label);report('已将当前项目加入批量队列。');});
   $('batch-add-variants').onclick=()=>safe(()=>{refreshProject();const lines=value('batch-variants').split(/\r?\n/).map(line=>line.trim()).filter(Boolean);if(!lines.length)throw new Error('请输入至少一行“标签|数字”。');const selectedId=project.preview.selectedId;for(const [index,line]of lines.entries()){const split=line.indexOf('|');if(split<1)throw new Error(`第 ${index+1} 行需使用“标签|数字”格式。`);const label=line.slice(0,split).trim(),numberValue=line.slice(split+1).trim();if(!label||Array.from(label).length>12)throw new Error(`第 ${index+1} 行标签需为 1–12 个字符。`);if(!/^\d{1,4}$/.test(numberValue))throw new Error(`第 ${index+1} 行数字需为 1–4 位。`);const variant=structuredClone(project),option=variant.options.find(item=>item.id===selectedId);option.label=label;option.value=numberValue;enqueueProject(variant,label);}report(`已批量加入 ${lines.length} 个替换任务。`);});
   $('batch-run').onclick=()=>safe(async()=>{await queue.run();report('批量队列已结束，可下载 ZIP。');});$('batch-cancel').onclick=()=>{queue.cancelAll();report('正在取消批量任务。');};$('batch-retry').onclick=()=>safe(async()=>{for(const task of queue.list())if(['failed','cancelled'].includes(task.status))queue.retryTask(task.id);await queue.run();});$('batch-zip').onclick=()=>safe(async()=>download(await queue.createZip(),'signal-batch.zip','application/zip'));

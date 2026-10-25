@@ -4,11 +4,15 @@ import {DEFAULT_DESIGN,DESIGN_GROUPS,DESIGN_FIELDS,validateDesign,outsideSliderR
 import {ASPECTS,moveOption,previewIssue} from './editor-data.js';
 import {DESIGN_STORAGE_KEY} from './default-settings.js';
 import {exportFrameZip} from './frame-export.js';
+import {exportGif,resolveGifResolution} from './gif-export.js';
+import {GIF_PROFILES,DEFAULT_GIF_PROFILE,gifSettings} from './gif-options.js';
+import {assertRasterResourceBudget,getExportResolution} from './export-plan.js';
 import {createDefaultProject,normalizeProject,parseProject,serializeProject} from './project-model.js';
 import {createProjectRenderState} from './project-runtime.js';
 import {assertProjectImageAssets} from './render-export.js';
 import {createManagedAudioAsset,getAudioPlaybackState} from './audio-project.js';
 import {LocalFontManager} from './font-manager.js';
+import {assertLayerImageDimensions,inspectLayerImageFile} from './layers.js';
 const $=id=>document.getElementById(id),initial=resolveOptionSource(APP_CONFIG.optionSource),OPTION_STORAGE_KEY='signal-custom-options-v1',defaultCustomOptions=resolveOptionSource({mode:'custom'});
 function loadDesign(){try{return validateDesign(JSON.parse(localStorage.getItem(DESIGN_STORAGE_KEY)??'{}'));}catch{return {...DEFAULT_DESIGN};}}
 function loadCustomOptions(){try{const saved=localStorage.getItem(OPTION_STORAGE_KEY);return saved?validateOptions(JSON.parse(saved)):structuredClone(defaultCustomOptions);}catch{return structuredClone(defaultCustomOptions);}}
@@ -183,101 +187,121 @@ function downloadSettings(){
   announce('已导出完整项目配置；本地音频、字体和图片文件内容不会写入 JSON。');
 }
 let frameExportRunning=false,frameExportController=null,frameExportSupportRevision=0,videoExporterPromise=null,frameExportCheckTimer=0;
-const frameExportFieldIds=['export-format','frame-start','frame-end','frame-quality','frame-aspect','frame-framing','frame-fps','frame-zip-fps','frame-quality-preset','frame-bitrate','frame-audio','frame-audio-source'];
+const frameExportFieldIds=['export-format','frame-start','frame-end','frame-quality','frame-aspect','frame-framing','frame-fps','frame-zip-fps','frame-gif-compression','frame-gif-size','frame-quality-preset','frame-bitrate','frame-audio','frame-audio-source'];
 const loadVideoExporter=()=>videoExporterPromise??=import('./video-export.js');
 function readFrameExportSettings(){
   const number=(id,label)=>{const value=$(id).value.trim();if(value==='')throw new Error(`请输入${label}。`);return Number(value);};
-  const format=$('export-format').value;if(!['mp4','zip'].includes(format))throw new Error('导出格式无效。');
+  const format=$('export-format').value;if(!['mp4','zip','gif'].includes(format))throw new Error('导出格式无效。');
+  const gifCompression=$('frame-gif-compression').value,gifProfile=GIF_PROFILES[gifCompression];
+  if(format==='gif'&&!gifProfile)throw new Error('GIF 压缩选项无效。');
   const audioSource=$('frame-audio-source')?.value??(state.project.audio.source==='none'?'none':state.project.audio.source);
   const settings={
     format,start:number('frame-start','开始时间'),end:number('frame-end','结束时间'),
-    fps:number(format==='mp4'?'frame-fps':'frame-zip-fps','帧率'),quality:$('frame-quality').value,
+    fps:format==='gif'?gifProfile.fps:number(format==='mp4'?'frame-fps':'frame-zip-fps','帧率'),quality:$('frame-quality').value,
     aspect:$('frame-aspect').value,framing:$('frame-framing')?.value??state.framing,
+    gifCompression,gifSize:$('frame-gif-size').value,
     qualityPreset:$('frame-quality-preset')?.value??'balanced',videoBitrate:($('frame-quality-preset')?.value==='custom'?number('frame-bitrate','自定义码率')*1_000_000:undefined),
-    audioSource,includeAudio:$('frame-audio').checked&&audioSource!=='none'
+    audioSource,includeAudio:format==='mp4'&&$('frame-audio').checked&&audioSource!=='none'
   };
-  if(settings.format==='mp4'&&settings.includeAudio&&settings.audioSource==='custom'&&!customAudioAsset)throw new Error('请先在“音频”面板导入自定义音轨。');
+  if(format==='mp4'&&settings.includeAudio&&settings.audioSource==='custom'&&!customAudioAsset)throw new Error('请先在“音频”面板导入自定义音轨。');
   return settings;
 }
 function setFrameExportFieldsDisabled(disabled){for(const id of frameExportFieldIds)if($(id))$(id).disabled=disabled;}
 function updateFrameExportFormat(){
-  const mp4=$('export-format').value==='mp4',customBitrate=mp4&&$('frame-quality-preset').value==='custom';
-  $('frame-audio-row').hidden=!mp4;
-  $('frame-audio-source-row').hidden=!mp4;$('frame-quality-preset-row').hidden=!mp4;$('frame-bitrate-row').hidden=!customBitrate;
-  $('frame-mp4-fps-row').hidden=!mp4;$('frame-zip-fps-row').hidden=mp4;
-  $('frame-export-intro').textContent=mp4?'逐帧渲染并在浏览器中生成 H.264 / AAC MP4。':'逐帧渲染无损 PNG，并打包为 ZIP。';
-  $('frame-export-start').textContent=mp4?'生成 MP4':'生成 ZIP';
+  const format=$('export-format').value,mp4=format==='mp4',zip=format==='zip',gif=format==='gif',customBitrate=mp4&&$('frame-quality-preset').value==='custom';
+  $('frame-quality-row').hidden=gif;$('frame-audio-row').hidden=!mp4;$('frame-audio-source-row').hidden=!mp4;
+  $('frame-quality-preset-row').hidden=!mp4;$('frame-bitrate-row').hidden=!customBitrate;
+  $('frame-mp4-fps-row').hidden=!mp4;$('frame-zip-fps-row').hidden=!zip;
+  $('frame-gif-compression-row').hidden=!gif;$('frame-gif-size-row').hidden=!gif;
+  $('frame-export-intro').textContent=mp4?'逐帧渲染并在浏览器中生成 H.264 / AAC MP4。':zip?'逐帧渲染无损 PNG，并打包为 ZIP。':'以自适应调色板生成彩色 GIF，并合并重复帧与裁切变化区域。';
+  $('frame-export-start').textContent=mp4?'生成 MP4':zip?'生成 ZIP':'生成 GIF';
   if(!mp4){$('frame-load-warning').textContent='';$('frame-load-warning').hidden=true;}
 }
-async function refreshFrameExportSupport(){
+function validateStillExportSettings(settings){
+  const duration=projectDuration();
+  if(!Number.isFinite(settings.start)||!Number.isFinite(settings.end)||settings.start<0||settings.end<settings.start||settings.end>duration)throw new Error(`时间范围需在 0–${duration.toFixed(2)} 秒内，并且起点不晚于终点。`);
+  if(settings.format==='zip'&&(!Number.isInteger(settings.fps)||settings.fps<1||settings.fps>165))throw new Error('PNG ZIP 帧率需为 1–165 的整数。');
+  const profile=settings.format==='gif'?gifSettings(settings.gifCompression,settings.gifSize):null;
+  const fps=profile?.fps??settings.fps,frameCount=Math.floor((settings.end-settings.start)*fps+1e-9)+1;
+  if(frameCount>5000)throw new Error('单次导出最多 5000 帧，请缩短时间范围或降低帧率。');
+  const resolution=settings.format==='gif'?resolveGifResolution(settings.aspect,profile.height):getExportResolution(settings.aspect,settings.quality);
+  assertRasterResourceBudget({...resolution,frameCount,label:settings.format==='gif'?'GIF':'PNG ZIP'});
+  return{...resolution,frameCount,fps,profile};
+}
+async function refreshFrameExportSupport({preserveStatus=false}={}){
   clearTimeout(frameExportCheckTimer);
   if(frameExportRunning)return;
   const revision=++frameExportSupportRevision,status=$('frame-export-status'),button=$('frame-export-start');
+  const writeStatus=message=>{if(!preserveStatus)status.textContent=message;};
   updateFrameExportFormat();
-  try{assertProjectImageAssets(state.project,{images:layerImages});}
-  catch(error){status.textContent=`当前项目无法导出：${error.message}`;$('frame-load-warning').hidden=true;button.disabled=true;return;}
-  if($('export-format').value==='zip'){status.textContent='PNG ZIP 支持 1080p / 2K / 4K、1–165 FPS；帧序列会包含结束时刻画面。';button.disabled=false;return;}
-  button.disabled=true;status.textContent='正在检查本机 H.264 / AAC 编码兼容性…';
+  let settings;
+  try{assertProjectImageAssets(state.project,{images:layerImages});settings=readFrameExportSettings();}
+  catch(error){writeStatus(`当前项目无法导出：${error.message}`);$('frame-load-warning').hidden=true;button.disabled=true;return;}
+  if(settings.format!=='mp4'){
+    try{
+      const plan=validateStillExportSettings(settings);
+      if(settings.format==='zip')writeStatus(`PNG ZIP ${plan.width} × ${plan.height} · ${plan.fps} FPS · ${plan.frameCount} 帧；帧序列包含结束时刻画面。`);
+      else writeStatus(`GIF ${plan.width} × ${plan.height} · ${plan.fps} FPS · ${plan.profile.colors} 色 · ${plan.frameCount} 帧；不包含音轨。`);
+      button.disabled=false;
+    }catch(error){writeStatus(`当前设置无法导出：${error.message}`);button.disabled=true;}
+    return;
+  }
+  button.disabled=true;writeStatus('正在检查本机 H.264 / AAC 编码兼容性…');
   try{
-    const settings=readFrameExportSettings(),{checkMp4ExportSupport}=await loadVideoExporter();
-    await checkMp4ExportSupport({...settings,duration:projectDuration(),audioBuffer:settings.audioSource==='custom'?customAudioAsset?.audioBuffer:null});
+    const {checkMp4ExportSupport}=await loadVideoExporter(),runtimeAssets={images:layerImages};
+    await checkMp4ExportSupport({...settings,duration:projectDuration(),audioBuffer:settings.audioSource==='custom'?customAudioAsset?.audioBuffer:null,project:state.project,runtimeAssets});
     if(revision!==frameExportSupportRevision||frameExportRunning||!$('frame-export-dialog').open)return;
     const plan=await import('./export-plan.js').then(module=>module.createMp4ExportPlan({...settings,duration:projectDuration()}));
-    status.textContent=`当前配置可用：H.264 ${settings.fps} FPS · ${(plan.bitrate/1_000_000).toFixed(1)} Mbps${settings.includeAudio&&settings.audioSource!=='none'?' + AAC':'（无音轨）'}。${plan.load.warning?` ${plan.load.warning}`:''}`;
+    writeStatus(`当前配置可用：H.264 ${settings.fps} FPS · ${(plan.bitrate/1_000_000).toFixed(1)} Mbps${settings.includeAudio?' + AAC':'（无音轨）'}。${plan.load.warning?` ${plan.load.warning}`:''}`);
     $('frame-load-warning').textContent=plan.load.warning;$('frame-load-warning').hidden=!plan.load.warning;
     button.disabled=false;
   }catch(error){
     if(revision!==frameExportSupportRevision||frameExportRunning||!$('frame-export-dialog').open)return;
-    status.textContent=`当前设置无法导出 MP4：${error.message}`;$('frame-load-warning').hidden=true;button.disabled=true;
+    writeStatus(`当前设置无法导出 MP4：${error.message}`);$('frame-load-warning').hidden=true;button.disabled=true;
   }
 }
-function scheduleFrameExportSupportCheck(){
-  clearTimeout(frameExportCheckTimer);
-  frameExportCheckTimer=setTimeout(()=>void refreshFrameExportSupport(),150);
-}
+function scheduleFrameExportSupportCheck(){clearTimeout(frameExportCheckTimer);frameExportCheckTimer=setTimeout(()=>void refreshFrameExportSupport(),150);}
 function openFrameExport(){
-  $('export-format').value='mp4';$('frame-start').value='0';$('frame-end').value=String(projectDuration());$('frame-quality').value=state.project.export.quality;$('frame-fps').value=String(state.project.export.fps);$('frame-zip-fps').value='30';$('frame-aspect').value=state.aspect;if($('frame-framing'))$('frame-framing').value=state.framing;if($('frame-quality-preset'))$('frame-quality-preset').value=state.project.export.bitrateMode==='custom'?'custom':state.project.export.qualityPreset;if($('frame-bitrate'))$('frame-bitrate').value=String((state.project.export.videoBitrate??12_000_000)/1_000_000);if($('frame-audio-source'))$('frame-audio-source').value=state.project.audio.source;$('frame-audio').checked=state.project.export.includeAudio;
-  $('frame-progress').hidden=true;$('frame-progress').value=0;$('frame-export-cancel').hidden=true;
-  $('frame-export-start').disabled=true;$('frame-export-status').textContent='';
-  $('frame-export-close').disabled=false;
-  setFrameExportFieldsDisabled(false);updateFrameExportFormat();
-  $('frame-export-dialog').showModal();
-  void refreshFrameExportSupport();
+  const duration=projectDuration();$('export-format').value='mp4';$('frame-start').value='0';$('frame-start').max=String(duration);$('frame-end').value=String(duration);$('frame-end').max=String(duration);
+  $('frame-quality').value=state.project.export.quality;$('frame-fps').value=String(state.project.export.fps);$('frame-zip-fps').value='30';$('frame-aspect').value=state.aspect;
+  $('frame-framing').value=state.framing;$('frame-quality-preset').value=state.project.export.bitrateMode==='custom'?'custom':state.project.export.qualityPreset;$('frame-bitrate').value=String((state.project.export.videoBitrate??12_000_000)/1_000_000);
+  $('frame-audio-source').value=state.project.audio.source;$('frame-audio').checked=state.project.export.includeAudio;
+  $('frame-gif-compression').value=DEFAULT_GIF_PROFILE;$('frame-gif-size').value=GIF_PROFILES[DEFAULT_GIF_PROFILE].size;
+  $('frame-progress').hidden=true;$('frame-progress').value=0;$('frame-export-cancel').hidden=true;$('frame-export-start').disabled=true;$('frame-export-status').textContent='';$('frame-export-close').disabled=false;
+  setFrameExportFieldsDisabled(false);updateFrameExportFormat();$('frame-export-dialog').showModal();void refreshFrameExportSupport();
 }
 async function runFrameExport(){
   if(frameExportRunning)return;
   const button=$('frame-export-start'),cancel=$('frame-export-cancel'),progress=$('frame-progress'),status=$('frame-export-status');
-  let settings;
-  try{settings=readFrameExportSettings();}catch(error){status.textContent=`导出失败：${error.message}`;return;}
+  let settings;try{settings=readFrameExportSettings();}catch(error){status.textContent=`导出失败：${error.message}`;return;}
   frameExportRunning=true;frameExportController=new AbortController();frameExportSupportRevision++;
-  button.disabled=true;cancel.hidden=false;cancel.disabled=false;$('frame-export-close').disabled=true;setFrameExportFieldsDisabled(true);progress.hidden=false;progress.value=0;
-  pause();
+  button.disabled=true;cancel.hidden=false;cancel.disabled=false;$('frame-export-close').disabled=true;setFrameExportFieldsDisabled(true);progress.hidden=false;progress.value=0;pause();
   try{
     const common={
       options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,
       aspect:settings.aspect,quality:settings.quality,framing:settings.framing,start:settings.start,end:settings.end,fps:settings.fps,duration:projectDuration(),
-      project:structuredClone(state.project),runtimeAssets:{images:layerImages}
+      project:structuredClone(state.project),runtimeAssets:{images:layerImages},signal:frameExportController.signal,isCancelled:()=>frameExportController.signal.aborted
     };
-    let result,filename;
+    let result,filename,formatLabel;
     if(settings.format==='mp4'){
       const {exportMp4Video}=await loadVideoExporter();
-      result=await exportMp4Video({...common,qualityPreset:settings.qualityPreset,videoBitrate:settings.videoBitrate,includeAudio:settings.includeAudio,audioSource:settings.audioSource,audioBuffer:settings.audioSource==='custom'?customAudioAsset?.audioBuffer:null,audioSettings:state.project.audio,signal:frameExportController.signal,onProgress:(percent,message)=>{progress.value=percent;status.textContent=`${Math.round(percent)}% · ${message}`;}});
-      filename=`signal-${result.width}x${result.height}-${result.fps}fps.mp4`;
+      result=await exportMp4Video({...common,qualityPreset:settings.qualityPreset,videoBitrate:settings.videoBitrate,includeAudio:settings.includeAudio,audioSource:settings.audioSource,audioBuffer:settings.audioSource==='custom'?customAudioAsset?.audioBuffer:null,audioSettings:state.project.audio,onProgress:(percent,message)=>{progress.value=percent;status.textContent=`${Math.round(percent)}% · ${message}`;}});
+      filename=`signal-${result.width}x${result.height}-${result.fps}fps.mp4`;formatLabel='MP4';
+    }else if(settings.format==='zip'){
+      result=await exportFrameZip({...common,onProgress:(complete,total,time)=>{const percent=complete/total*100;progress.value=percent;status.textContent=`${Math.round(percent)}% · 正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}});
+      filename=result&&`signal-frames-${result.width}x${result.height}-${result.fps}fps.zip`;formatLabel='ZIP';
     }else{
-      result=await exportFrameZip({...common,signal:frameExportController.signal,isCancelled:()=>frameExportController.signal.aborted,onProgress:(complete,total,time)=>{const percent=complete/total*100;progress.value=percent;status.textContent=`${Math.round(percent)}% · 正在渲染 ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}});
-      filename=result&&`signal-frames-${result.width}x${result.height}-${result.fps}fps.zip`;
+      result=await exportGif({...common,compression:settings.gifCompression,size:settings.gifSize,onProgress:(complete,total,time,phase)=>{const percent=phase==='palette'?complete/total*50:50+complete/total*50;progress.value=percent;status.textContent=`${Math.round(percent)}% · ${phase==='palette'?'正在采样颜色':'正在编码 GIF'} ${complete}/${total} 帧 · ${time.toFixed(2)} 秒`;}});
+      filename=result&&`signal-${result.width}x${result.height}-${result.fps}fps.gif`;formatLabel='GIF';
     }
     if(!result||frameExportController.signal.aborted){status.textContent='导出已取消。';return;}
-    const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=filename;link.click();
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-    progress.value=100;
-    status.textContent=settings.format==='mp4'
-      ?`已生成 ${result.duration.toFixed(3)} 秒、${result.frameCount} 帧的 MP4（${result.width} × ${result.height}，${result.fps} FPS，${result.includeAudio?`含${result.audioSource==='custom'?'自定义':'原版'}音轨`:'无音轨'}），下载已开始。`
-      :`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），ZIP 下载已开始。`;
+    const url=URL.createObjectURL(result.blob),link=document.createElement('a');link.href=url;link.download=filename;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);progress.value=100;
+    if(settings.format==='mp4')status.textContent=`已生成 ${result.duration.toFixed(3)} 秒、${result.frameCount} 帧的 MP4（${result.width} × ${result.height}，${result.fps} FPS，${result.includeAudio?`含${result.audioSource==='custom'?'自定义':'原版'}音轨`:'无音轨'}），下载已开始。`;
+    else{const bytes=result.blob.size,volume=bytes<1024*1024?`${(bytes/1024).toFixed(1)} KB`:`${(bytes/1024/1024).toFixed(2)} MB`;status.textContent=`已生成 ${result.frameCount} 帧（${result.width} × ${result.height}，${result.fps} FPS），${formatLabel} ${volume} 已开始下载。`;}
   }catch(error){status.textContent=frameExportController.signal.aborted||error.name==='AbortError'?'导出已取消。':`导出失败：${error.message}`;}
   finally{
     frameExportRunning=false;frameExportController=null;setFrameExportFieldsDisabled(false);$('frame-export-close').disabled=false;cancel.hidden=true;cancel.disabled=false;
-    updateFrameExportFormat();button.disabled=false;
+    updateFrameExportFormat();void refreshFrameExportSupport({preserveStatus:true});
   }
 }
 function updatePlayButton(){$('play-label').textContent=state.playing?'暂停':state.time>=projectDuration()?'再播放':'播放';document.querySelector('.play-icon').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-label',state.playing?'暂停动画':'播放动画');}
@@ -331,7 +355,8 @@ $('export-frames').onclick=openFrameExport;$('frame-export-start').onclick=()=>v
 $('frame-export-cancel').onclick=()=>{if(!frameExportController)return;$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController.abort();};
 $('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController?.abort();}else frameExportSupportRevision++;});
 $('export-format').addEventListener('change',()=>void refreshFrameExportSupport());
-for(const id of ['frame-start','frame-end','frame-quality','frame-fps','frame-zip-fps','frame-aspect','frame-framing','frame-quality-preset','frame-bitrate','frame-audio','frame-audio-source'])$(id)?.addEventListener('change',scheduleFrameExportSupportCheck);
+for(const id of ['frame-start','frame-end','frame-quality','frame-fps','frame-zip-fps','frame-aspect','frame-framing','frame-quality-preset','frame-bitrate','frame-audio','frame-audio-source','frame-gif-size'])$(id)?.addEventListener('change',scheduleFrameExportSupportCheck);
+$('frame-gif-compression').addEventListener('change',()=>{$('frame-gif-size').value=GIF_PROFILES[$('frame-gif-compression').value].size;scheduleFrameExportSupportCheck();});
 $('import-settings').onclick=()=>{$('settings-file').value='';$('settings-file').click();};
 $('settings-file').onchange=async e=>{
   const file=e.target.files?.[0];if(!file)return;
@@ -383,17 +408,17 @@ async function loadProjectFont(file,target='text'){
 }
 const layerImageUrls=new Map();
 async function setLayerImageFile(layerId,file){
-  const extension=String(file?.name??'').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
-  if(!file||(!/^image\/(?:png|jpeg|webp|svg\+xml)$/i.test(file.type)&&!['png','jpg','jpeg','webp','svg'].includes(extension)))throw new Error('图片图层仅支持 PNG、JPEG、WebP 或 SVG。');
+  const metadata=inspectLayerImageFile(file);
   const url=URL.createObjectURL(file),image=new Image();image.decoding='async';
-  try{await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('图片无法解码。'));image.src=url;});}
+  try{await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('图片无法解码。'));image.src=url;});assertLayerImageDimensions(image);}
   catch(error){URL.revokeObjectURL(url);throw error;}
-  const previous=layerImageUrls.get(layerId);if(previous)URL.revokeObjectURL(previous);layerImageUrls.set(layerId,url);layerImages.set(layerId,image);draw();return{name:file.name,width:image.naturalWidth,height:image.naturalHeight};
+  const previous=layerImageUrls.get(layerId);if(previous)URL.revokeObjectURL(previous);layerImageUrls.set(layerId,url);layerImages.set(layerId,image);draw();return{name:metadata.name,width:image.naturalWidth,height:image.naturalHeight};
 }
 function releaseLayerImage(layerId){const url=layerImageUrls.get(layerId);if(url)URL.revokeObjectURL(url);layerImageUrls.delete(layerId);return layerImages.delete(layerId);}
 const videoExportOptions=config=>({options:structuredClone(state.options),design:structuredClone(state.design),view:state.view,selectedId:state.selectedId,aspect:state.aspect,framing:state.framing,quality:'1080p',start:0,end:projectDuration(),duration:projectDuration(),fps:30,includeAudio:true,project:structuredClone(state.project),runtimeAssets:{images:layerImages},audioSource:state.project.audio.source,audioBuffer:customAudioAsset?.audioBuffer,audioSettings:state.project.audio,...config});
 window.ReplicaApp=Object.freeze({
   getState:snapshot,getProject:()=>structuredClone(state.project),getCustomAudioBuffer:()=>customAudioAsset?.audioBuffer??null,setProject:project=>applyProject(project),updateProject,setCustomAudioFile,setAudioSource,loadProjectFont,setLayerImageFile,releaseLayerImage,setOptions,setView,setAspect,setOptionSource,setDesign,importSettings:applyImport,exportSettings:()=>serializeProject(state.project),exportFrames:config=>exportFrameZip(videoExportOptions(config)),
+  exportGif:config=>exportGif(videoExportOptions(config)),
   checkVideoExport:config=>loadVideoExporter().then(module=>module.checkMp4ExportSupport(videoExportOptions(config))),
   exportVideo:config=>loadVideoExporter().then(module=>module.exportMp4Video(videoExportOptions(config))),seek,play,pause
 });

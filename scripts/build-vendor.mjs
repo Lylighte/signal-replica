@@ -1,7 +1,9 @@
 import {mkdir,copyFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 
 const outdir=new URL('../dist/vendor/',import.meta.url);
+const projectRoot=fileURLToPath(new URL('..',import.meta.url));
 await mkdir(outdir,{recursive:true});
 
 await build({
@@ -18,11 +20,11 @@ await build({
       } from 'mediabunny';
       export {registerAacEncoder} from '@mediabunny/aac-encoder';
     `,
-    resolveDir:new URL('..',import.meta.url).pathname,
+    resolveDir:projectRoot,
     sourcefile:'signal-mediabunny-entry.js',
     loader:'js'
   },
-  outfile:new URL('mediabunny.js',outdir).pathname,
+  outfile:fileURLToPath(new URL('mediabunny.js',outdir)),
   bundle:true,
   format:'esm',
   platform:'browser',

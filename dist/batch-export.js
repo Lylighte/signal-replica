@@ -99,6 +99,28 @@ const progressValue=(current,total)=>{
   return Number.isFinite(value)?Math.max(0,Math.min(1,value)):0;
 };
 
+const cloneProject=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
+
+/**
+ * Snapshot every serializable batch setting while deliberately retaining the
+ * AudioBuffer that belongs to this task. AudioBuffers are runtime resources,
+ * so they cannot live in project JSON and must not be looked up from mutable
+ * application state when the queued task eventually starts.
+ */
+export function createBatchExportInput(source,{audioBuffer=null}={}){
+  if(!source||typeof source!=='object'||Array.isArray(source))throw new Error('批量任务项目格式无效。');
+  const project=cloneProject(source),settings=project.export,audioSettings=project.audio;
+  if(!settings||!audioSettings||!project.preview||!project.timeline)throw new Error('批量任务缺少导出设置。');
+  return{
+    project,options:project.options,design:project.design,view:project.preview.view,selectedId:project.preview.selectedId,
+    aspect:settings.aspect,framing:project.preview.framing,quality:settings.quality,
+    qualityPreset:settings.bitrateMode==='custom'?'custom':settings.qualityPreset,videoBitrate:settings.videoBitrate,
+    duration:project.timeline.duration,start:0,end:project.timeline.duration,fps:settings.fps,
+    includeAudio:settings.includeAudio,audioSource:audioSettings.source,audioBuffer:audioSettings.source==='custom'?audioBuffer:null,
+    audioSettings
+  };
+}
+
 export class BatchExportQueue{
   constructor({exporter,concurrency=1,onUpdate}={}){
     if(typeof exporter!=='function')throw new Error('批量导出队列需要 exporter 函数。');
