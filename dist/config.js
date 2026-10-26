@@ -1,7 +1,7 @@
 import {DEFAULT_SETTINGS} from './default-settings.js';
 export const REFERENCE_OFFSET=64/30;
 const at=time=>time+REFERENCE_OFFSET;
-export const APP_CONFIG = Object.freeze({ optionSource: { mode: 'custom', presetId: 'four-difficulties' }, preview:DEFAULT_SETTINGS.preview, maxOptions: 8, maxDigits: 4, maxLabelLength: 12, duration: 17.507845804988662, stillTime: at(4.5) });
+export const APP_CONFIG = Object.freeze({ optionSource: { mode: 'custom', presetId: 'four-difficulties' }, preview:DEFAULT_SETTINGS.preview, maxOptions: 16, maxDigits: 4, maxLabelLength: 12, duration: 17.507845804988662, stillTime: at(4.5) });
 export const MOTION = Object.freeze({ introEnd:.55, selectStart:2.93, selectEnd:3.63, expandStart:at(2.12), expandEnd:at(3.42), numberAppear:at(74/30), flashEnd:at(94/30), numberSettle:at(3.55), flashes:[[at(73/30),at(81/30)],[at(85/30),at(94/30)]], rollStart:at(5.9), sideStart:at(8.8), sideEnd:at(11.1), labelExitEnd:at(11.6), exposureStart:at(10), exitStart:16.0, exitEnd:17.42, fadeStart:17.35, blankAt:17.45, glitchBursts:[[224/30,228/30,.28]], noiseBursts:[[202/30,206/30,.55],[210/30,215/30,.6],[221/30,223/30,.35],[224/30,229/30,.65],[232/30,233/30,.45]] });
 export const PRESETS = Object.freeze([
   { id: 'four-difficulties', name: '四难度同屏', options: DEFAULT_SETTINGS.options },
@@ -19,7 +19,7 @@ export function validateOption(option) {
 }
 
 export function validateOptions(options) {
-  if (!Array.isArray(options) || options.length < 1 || options.length > APP_CONFIG.maxOptions) throw new Error('请设置 1–8 个选项。');
+  if (!Array.isArray(options) || options.length < 1 || options.length > APP_CONFIG.maxOptions) throw new Error(`请设置 1–${APP_CONFIG.maxOptions} 个选项。`);
   const result = options.map(validateOption);
   if (new Set(result.map(x=>x.id)).size !== result.length) throw new Error('选项标识不能重复。');
   return result;

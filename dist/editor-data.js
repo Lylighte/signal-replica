@@ -1,6 +1,6 @@
 import {validateOptions} from './config.js';
 import {validateDesign} from './design.js';
-export const ASPECTS=Object.freeze({'16:9':{width:1920,height:1080},'4:3':{width:1440,height:1080}});
+export const ASPECTS=Object.freeze({'16:9':{width:1920,height:1080},'4:3':{width:1440,height:1080},'1:1':{width:1080,height:1080},'9:16':{width:1080,height:1920}});
 export function moveOption(options,id,direction){
   if(![-1,1].includes(direction))throw new Error('排序方向无效。');
   const result=validateOptions(options),index=result.findIndex(option=>option.id===id);
@@ -23,7 +23,7 @@ export function importSettings(text,current){
   const design=validateDesign(data.design??{},current.design),preview=data.preview??{};
   if(!preview||typeof preview!=='object'||Array.isArray(preview))throw new Error('预览设置格式无效。');
   const aspect=preview.aspect??current.aspect,view=preview.view??current.view;
-  if(!Object.hasOwn(ASPECTS,aspect)||!['grid','single'].includes(view))throw new Error('预览比例或布局无效。');
+  if(!Object.hasOwn(ASPECTS,aspect)||!['grid','single','focus','carousel','paged'].includes(view))throw new Error('预览比例或布局无效。');
   const selectedId=preview.selectedId??current.selectedId;
   return {options,design,view,aspect,selectedId:options.some(option=>option.id===selectedId)?selectedId:options[0].id};
 }

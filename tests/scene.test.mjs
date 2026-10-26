@@ -16,7 +16,8 @@ test('reject malformed content and duplicate identities',()=>{
   assert.throws(()=>validateOptions([{id:'a',label:' ',value:'0'}]));
   assert.throws(()=>validateOptions([{id:'a',label:'EZ',value:'0'},{id:'a',label:'HD',value:'1'}]));
   assert.throws(()=>validateOptions([]));
-  assert.throws(()=>validateOptions(Array.from({length:9},(_,i)=>({id:String(i),label:'X',value:'0'}))));
+  assert.equal(validateOptions(Array.from({length:16},(_,i)=>({id:String(i),label:'X',value:'0'}))).length,16);
+  assert.throws(()=>validateOptions(Array.from({length:17},(_,i)=>({id:String(i),label:'X',value:'0'}))),/1–16/);
 });
 test('preset results are independent copies and unknown sources fail',()=>{
   const a=resolveOptionSource({mode:'preset',presetId:'ez-zero'});a[0].value='9';
@@ -25,14 +26,21 @@ test('preset results are independent copies and unknown sources fail',()=>{
   assert.throws(()=>resolveOptionSource({mode:'other'}));
   assert.deepEqual(resolveOptionSource({mode:'custom'},[{id:'a',label:'TEST',value:'42'}]),[{id:'a',label:'TEST',value:'42'}]);
 });
-test('one through eight panels fit inside the reference content area',()=>{
-  for(let count=1;count<=8;count++){
+test('one through sixteen panels fit inside the reference content area',()=>{
+  for(let count=1;count<=16;count++){
     const options=Array.from({length:count},(_,i)=>({id:String(i),label:'X',value:'0'}));
     const panels=layoutPanels(options,'grid','0');assert.equal(panels.length,count);
     for(const p of panels){assert.ok(p.x>=240-1e-8);assert.ok(p.y>=0);assert.ok(p.x+720*p.scale<=1680+1e-8);assert.ok(p.y+540*p.scale<=1080+1e-8);}
   }
   assert.deepEqual(layoutPanels(PRESETS[0].options,'grid','ez').map(p=>[p.x,p.y,p.scale]),[[240,0,1],[960,0,1],[240,540,1],[960,540,1]]);
   assert.equal(layoutPanels(PRESETS[0].options,'single','hd')[0].option.id,'hd');
+});
+
+test('sixteen options survive settings export and import in order',()=>{
+  const options=Array.from({length:16},(_,index)=>({id:`id-${index}`,label:`OP${index+1}`,value:String(index).padStart(2,'0')}));
+  const current={options,design:{...DEFAULT_DESIGN},view:'grid',aspect:'16:9',selectedId:'id-15'};
+  const imported=importSettings(exportSettings(current),current);
+  assert.deepEqual(imported.options,options);assert.equal(imported.selectedId,'id-15');assert.equal(APP_CONFIG.maxOptions,16);
 });
 test('reels hold, join continuously and accelerate without reversal',()=>{
   assert.equal(reelPosition(4),0);assert.equal(reelPosition(MOTION.rollStart),0);
@@ -282,7 +290,7 @@ test('option-only imports keep settings and generate missing identities',()=>{
 });
 test('malformed imports do not modify any current option or setting',()=>{
   const current={options:PRESETS[0].options,design:{...DEFAULT_DESIGN},view:'grid',aspect:'16:9',selectedId:'ez'},before=structuredClone(current);
-  for(const text of ['{',JSON.stringify({version:2,options:current.options}),JSON.stringify({options:[]}),JSON.stringify({options:current.options,design:{unknown:1}}),JSON.stringify({options:current.options,preview:{aspect:'1:1'}}),JSON.stringify({options:[{id:'x',label:'X',value:'-1'}]})])assert.throws(()=>importSettings(text,current));
+  for(const text of ['{',JSON.stringify({version:2,options:current.options}),JSON.stringify({options:[]}),JSON.stringify({options:current.options,design:{unknown:1}}),JSON.stringify({options:current.options,preview:{aspect:'3:2'}}),JSON.stringify({options:[{id:'x',label:'X',value:'-1'}]})])assert.throws(()=>importSettings(text,current));
   assert.deepEqual(current,before);
 });
 test('oversized and physically invalid settings stay accepted but do not attempt unsafe drawing',()=>{

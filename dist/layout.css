@@ -8,6 +8,8 @@ body{height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:colu
 .preview-surface{container-type:size;flex:1;min-height:0;min-width:0;display:flex;align-items:center;justify-content:center}
 .preview-surface .stage{flex:none;width:min(100cqw,calc(100cqh * 16 / 9),1280px);height:auto;aspect-ratio:16/9}
 .preview-surface .stage[data-aspect="4:3"]{width:min(100cqw,calc(100cqh * 4 / 3),1280px);aspect-ratio:4/3}
+.preview-surface .stage[data-aspect="1:1"]{width:min(100cqw,100cqh,1280px);aspect-ratio:1/1}
+.preview-surface .stage[data-aspect="9:16"]{width:min(100cqw,calc(100cqh * 9 / 16),1280px);aspect-ratio:9/16}
 .preview-surface .stage:fullscreen{width:100vw;height:100vh;height:100dvh;aspect-ratio:auto}
 .preview-note,.preview>.design-error{flex:none}
 .transport{flex:none;padding-top:14px}

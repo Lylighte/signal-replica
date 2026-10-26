@@ -44,4 +44,9 @@ export class ScreenCurve {
       output.drawImage(this.surface,0,0);return true;
     }catch{this.failed=true;return false;}
   }
+  dispose(){
+    if(this.gl&&!this.gl.isContextLost())this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    if(this.surface){this.surface.width=1;this.surface.height=1;}
+    this.gl=null;this.surface=null;this.strength=null;
+  }
 }

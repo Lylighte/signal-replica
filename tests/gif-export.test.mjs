@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {createGifEncoder,lzwEncode} from '../dist/gif-encoder.js';
 import {buildPalette,indexColors,sampleColors} from '../dist/gif-palette.js';
 import {GIF_PROFILES,gifSettings} from '../dist/gif-options.js';
+import {resolveGifResolution} from '../dist/gif-export.js';
+import {resolveRenderResolution} from '../dist/render-export.js';
 
 function decodeLzw(minSize,bytes){
   const clear=1<<minSize,end=clear+1,output=[];let offset=0,bits,table,previous;
@@ -72,4 +74,15 @@ test('default compression reduces size and extreme profile supports a 160 by 90 
   const extreme=gifSettings('extreme');assert.deepEqual([extreme.height,extreme.fps,extreme.colors],[90,4,16]);
   assert.equal(gifSettings('extreme','240p').height,240);
   assert.throws(()=>gifSettings('invalid'));assert.throws(()=>gifSettings('compact','invalid'));
+});
+test('GIF resolution covers every Studio aspect and accepts a bounded explicit raster size',()=>{
+  assert.deepEqual(resolveGifResolution('16:9',90),{width:160,height:90});
+  assert.deepEqual(resolveGifResolution('4:3',90),{width:120,height:90});
+  assert.deepEqual(resolveGifResolution('1:1',90),{width:90,height:90});
+  assert.deepEqual(resolveGifResolution('9:16',90),{width:51,height:90});
+  assert.deepEqual(resolveGifResolution('9:16',90,{width:180,height:320}),{width:180,height:320});
+  assert.deepEqual(resolveRenderResolution('1:1','1080p'),{width:1080,height:1080});
+  assert.throws(()=>resolveGifResolution('invalid',90),/画面比例/);
+  assert.throws(()=>resolveGifResolution('16:9',90,{width:0,height:90}),/正整数/);
+  assert.throws(()=>resolveGifResolution('16:9',90,{width:3841,height:2160}),/4K/);
 });
