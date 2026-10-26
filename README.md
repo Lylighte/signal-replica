@@ -164,6 +164,10 @@ Node.js 测试不能替代真实浏览器的硬件/系统编码器验证。发�
 
 应用主体使用原生 HTML、CSS、JavaScript 和 Canvas。预览与三种导出共用 `SignalRenderer`、项目时间映射、布局、关键帧、Beat Sync、色差/抖动和图层模块。MP4 管线采用 Mediabunny 1.62.0 与 `@mediabunny/aac-encoder` 1.62.0；GIF 由本地调色板、LZW 和帧差编码模块生成。
 
+## 贡献模板
+
+在页面点击“导出配置”，即可通过 Issue 或 Pull Request 分享创作配置。收录目录、署名和投稿步骤见 [社区模板](templates/README.md)，其他贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## License / 开源许可证
 
 - 原始 [SIGNAL Replica](https://github.com/Lylighte/signal-replica) 项目采用 [MIT License](LICENSE)。本 Fork 基于该 MIT 许可代码进行修改和再发布，项目代码继续遵循仓库中的 MIT License。
