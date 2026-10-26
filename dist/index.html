@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111214">
-  <title>SIGNAL Studio</title>
-  <meta name="description" content="在浏览器中设计 SIGNAL 动画并逐帧导出带音轨的 MP4。">
+  <title>SIGNAL</title>
+  <meta name="description" content="自定义选项与数字，预览发光、滚动与故障动画。">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111214'/%3E%3Cpath d='M8 7h16v5H13v3h11v10H8v-5h11v-2H8z' fill='%23d9e1a1'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="layout.css">
 </head>
 <body>
   <header class="app-header">
-    <div class="identity"><span class="wordmark">SIGNAL<span class="wordmark-dot">.</span></span><span class="studio-mark">STUDIO</span></div>
-    <a class="github-link" href="https://github.com/chujiamo/signal-replica/tree/main" target="_blank" rel="noopener noreferrer">GitHub</a>
+    <div class="identity"><span class="wordmark">SIGNAL<span class="wordmark-dot">.</span></span></div>
+    <a class="github-link" href="https://github.com/Lylighte/signal-replica" target="_blank" rel="noopener noreferrer">GitHub</a>
   </header>
   <main class="workspace">
     <section class="preview" aria-label="动画预览">
@@ -41,17 +41,28 @@
         <div class="transport-bottom"><span class="keyboard-hint"><kbd>Space</kbd> 播放 / 暂停</span><div class="preview-export-actions"><button id="sound" class="quiet-button" aria-pressed="true">声音开启</button><button id="export-frames" class="play-button">导出…</button></div></div>
       </div>
     </section>
-    <aside class="editor" aria-label="SIGNAL Studio 编辑器">
-      <nav id="studio-tabs" class="studio-tabs" aria-label="编辑类别">
-        <button type="button" data-panel="content-panel" aria-pressed="true">内容</button><button type="button" data-panel="animation-panel" aria-pressed="false">动画</button><button type="button" data-panel="appearance-panel" aria-pressed="false">外观</button><button type="button" data-panel="audio-panel" aria-pressed="false">音频</button><button type="button" data-panel="layers-panel" aria-pressed="false">图层</button><button type="button" data-panel="project-panel" aria-pressed="false">项目</button>
-      </nav>
-      <section id="content-panel" class="studio-panel is-active">
+    <aside class="editor" aria-label="内容编辑">
+      <section id="content-panel">
         <div class="editor-heading"><div><span class="eyebrow">CONTENT</span><h2>编辑内容</h2></div><div class="editor-heading-actions"><span id="option-count" class="count-badge">4 项</span><button id="reset" class="text-button">恢复默认内容</button></div></div>
         <div id="preset-picker" hidden><label for="preset-select">选项预设</label><select id="preset-select"></select></div>
         <div class="column-labels" aria-hidden="true"><span>选项</span><span>数字</span></div><div id="option-list" class="option-list"></div><button id="add-option" class="add-button">＋ 添加选项</button>
+        <div class="settings-actions"><button id="import-settings" class="quiet-button">导入配置</button><button id="export-settings" class="quiet-button">导出配置</button></div>
+        <input id="settings-file" type="file" accept=".json,application/json" hidden>
         <div class="single-select" id="single-select-wrap" hidden><label for="selected-option">显示选项</label><select id="selected-option"></select></div>
       </section>
-      <section id="animation-panel" class="studio-panel" hidden>
+      <p id="form-status" class="form-status" aria-live="polite"></p>
+      <section class="design-editor" aria-label="画面参数"><div class="design-heading"><h3>画面参数</h3><button id="reset-design" class="text-button">恢复默认参数</button></div><p class="design-intro">即时更新，参数保存在本机。</p><div id="design-groups"></div><p id="curve-status" class="design-error" role="status" hidden>当前浏览器暂不支持曲面效果。</p></section>
+      <div class="editor-footer"><span class="font-note">Font: Saira</span><button id="advanced-open" type="button" class="quiet-button advanced-open" aria-haspopup="dialog" aria-controls="advanced-dialog" aria-expanded="false">高级功能</button></div>
+    </aside>
+  </main>
+  <dialog id="advanced-dialog" class="advanced-dialog" aria-labelledby="advanced-title">
+    <div class="advanced-shell">
+      <header class="advanced-header"><div><span class="eyebrow">SIGNAL STUDIO</span><h2 id="advanced-title">高级功能</h2></div><button id="advanced-close" type="button" class="quiet-button" aria-label="关闭高级功能">×</button></header>
+      <nav id="studio-tabs" class="studio-tabs advanced-nav" aria-label="高级功能类别">
+        <button type="button" data-panel="animation-panel" aria-pressed="true">动画</button><button type="button" data-panel="appearance-panel" aria-pressed="false">外观</button><button type="button" data-panel="audio-panel" aria-pressed="false">音频</button><button type="button" data-panel="layers-panel" aria-pressed="false">图层</button><button type="button" data-panel="project-panel" aria-pressed="false">项目</button>
+      </nav>
+      <div class="advanced-body">
+      <section id="animation-panel" class="studio-panel advanced-panel is-active">
         <div class="editor-heading"><div><span class="eyebrow">ANIMATION</span><h2>动画与布局</h2></div></div>
         <div class="control-grid"><label>展示模式<select id="display-mode"><option value="grid">同屏网格</option><option value="focus">单项聚焦</option><option value="carousel">轮播展示</option><option value="paged">分页展示</option></select></label><label>网格<select id="layout-mode"><option value="auto">智能自动</option><option value="2x2">2 × 2</option><option value="3x3">3 × 3</option><option value="4x4">4 × 4</option></select></label><label>间距<input id="layout-spacing" type="number" min="0" max="240" step="1" value="0"></label><label>页码<input id="layout-page" type="number" min="1" step="1" value="1"></label><label>画幅适配<select id="framing-mode"><option value="crop">居中裁剪</option><option value="fit">自适应缩放</option><option value="reflow">智能重排</option></select></label></div>
         <details class="studio-group" open><summary>自定义时长</summary><label class="full-control">总时长（秒）<input id="duration-total" type="number" min="0.1" max="3600" step="0.01"></label><div class="control-grid stage-durations"><label>入场<input id="duration-intro" type="number" min="0" step="0.01"></label><label>选择<input id="duration-select" type="number" min="0" step="0.01"></label><label>数字滚动<input id="duration-roll" type="number" min="0" step="0.01"></label><label>稳定<input id="duration-stable" type="number" min="0" step="0.01"></label><label>故障<input id="duration-glitch" type="number" min="0" step="0.01"></label><label>退场<input id="duration-exit" type="number" min="0" step="0.01"></label></div></details>
@@ -61,7 +72,6 @@
         <div class="editor-heading"><div><span class="eyebrow">APPEARANCE</span><h2>外观</h2></div></div>
         <details class="studio-group" open><summary>颜色主题</summary><label class="full-control">主题<select id="theme-select"></select></label><div id="theme-controls" class="control-grid"></div><div class="button-row"><button id="theme-save" type="button">保存主题</button><button id="theme-import" type="button">导入主题</button><button id="theme-export" type="button">导出主题</button><button id="theme-delete" type="button">删除自定义主题</button></div><input id="theme-file" type="file" accept=".json,application/json" hidden></details>
         <details class="studio-group"><summary>自定义字体</summary><div id="font-controls" class="control-grid"><label>数字字体<input id="number-font-file" type="file" accept=".ttf,.otf,.woff,.woff2,font/*"></label><label>文字字体<input id="text-font-file" type="file" accept=".ttf,.otf,.woff,.woff2,font/*"></label><label>数字字号<input id="number-font-size" type="number" min="1" max="4096"></label><label>文字字号<input id="text-font-size" type="number" min="1" max="4096"></label><label>数字字重<input id="number-font-weight" type="number" min="1" max="1000"></label><label>文字字重<input id="text-font-weight" type="number" min="1" max="1000"></label><label>数字字距<input id="number-letter-spacing" type="number" step="0.1"></label><label>文字字距<input id="text-letter-spacing" type="number" step="0.1"></label><label>数字描边<input id="number-stroke" type="number" min="0" step="0.1"></label><label>文字描边<input id="text-stroke" type="number" min="0" step="0.1"></label><label>数字阴影<input id="number-shadow" type="number" min="0" step="0.1"></label><label>文字阴影<input id="text-shadow" type="number" min="0" step="0.1"></label></div></details>
-        <section class="design-editor" aria-label="画面参数"><div class="design-heading"><h3>原版画面参数</h3><button id="reset-design" class="text-button">恢复默认参数</button></div><p class="design-intro">即时更新，参数保存在本机。</p><div id="design-groups"></div><p id="curve-status" class="design-error" role="status" hidden>当前浏览器暂不支持曲面效果。</p></section>
       </section>
       <section id="audio-panel" class="studio-panel" hidden>
         <div class="editor-heading"><div><span class="eyebrow">AUDIO</span><h2>音乐与节拍</h2></div></div>
@@ -75,14 +85,15 @@
       </section>
       <section id="project-panel" class="studio-panel" hidden>
         <div class="editor-heading"><div><span class="eyebrow">PROJECT</span><h2>模板、分享与批量</h2></div></div>
-        <details class="studio-group" open><summary>项目配置</summary><div class="settings-actions"><button id="import-settings" class="quiet-button">导入 JSON</button><button id="export-settings" class="quiet-button">导出 JSON</button></div><input id="settings-file" type="file" accept=".json,application/json" hidden></details>
+        <p class="advanced-note">项目 JSON 的导入与导出保留在默认内容编辑器中；模板、分享和批量任务在此管理。</p>
         <details class="studio-group" open><summary>模板库</summary><label class="full-control">模板<select id="template-select"></select></label><div class="button-row"><button id="template-apply" type="button">应用</button><button id="template-save" type="button">保存当前</button><button id="template-copy" type="button">复制</button><button id="template-delete" type="button">删除</button><button id="template-import" type="button">导入</button><button id="template-export" type="button">导出</button></div><input id="template-file" type="file" accept=".json,application/json" hidden></details>
         <details class="studio-group"><summary>分享配置</summary><textarea id="share-link" rows="4" readonly aria-label="分享链接"></textarea><div class="button-row"><button id="share-create" type="button">生成链接</button><button id="share-copy" type="button">复制</button></div><p id="share-status" class="inline-status"></p></details>
         <details class="studio-group"><summary>批量导出</summary><label class="full-control">文件名模板<input id="batch-filename" type="text" value="signal-{index}-{label}"></label><label class="full-control">批量替换（每行“标签|数字”，替换当前选项）<textarea id="batch-variants" rows="4" placeholder="EZ|10&#10;HD|14"></textarea></label><div id="batch-list" class="batch-list"></div><div class="button-row"><button id="batch-add" type="button">添加当前任务</button><button id="batch-add-variants" type="button">按行批量添加</button><button id="batch-run" type="button">开始队列</button><button id="batch-cancel" type="button">全部取消</button><button id="batch-retry" type="button">重试失败</button><button id="batch-zip" type="button">下载 ZIP</button></div></details>
       </section>
-      <p id="form-status" class="form-status" aria-live="polite"></p><div class="editor-footer"><span class="font-note">Saira · 本地处理，不上传文件</span></div>
-    </aside>
-  </main>
+      </div>
+      <p id="advanced-status" class="form-status advanced-status" aria-live="polite"></p>
+    </div>
+  </dialog>
   <dialog id="frame-export-dialog" class="frame-export-dialog" aria-labelledby="frame-export-title">
     <form method="dialog" class="frame-export-form">
       <div class="design-heading"><h2 id="frame-export-title">导出动画</h2><button id="frame-export-close" class="quiet-button" value="close" aria-label="关闭">×</button></div>

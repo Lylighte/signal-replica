@@ -12,7 +12,7 @@ const number=id=>Number(value(id));
 const download=(data,name,type='application/json')=>{
   const blob=data instanceof Blob?data:new Blob([data],{type}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
 };
-const report=message=>{if($('form-status'))$('form-status').textContent=message;};
+const report=message=>{for(const id of ['form-status','advanced-status'])if($(id))$(id).textContent=message;};
 
 export function createLayerListButton(layer,{selected=false,onSelect,documentRef=globalThis.document}={}){
   if(!documentRef?.createElement)throw new Error('当前环境无法创建图层控件。');

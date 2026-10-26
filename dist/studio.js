@@ -76,7 +76,7 @@ function renderDesignEditor(){
   }
 }
 $('reset-design').onclick=()=>{setDesign(DEFAULT_DESIGN);for(const {input,error}of designControls.values()){input.removeAttribute('aria-invalid');error.hidden=true;}announce('已恢复默认画面参数。');};
-function announce(message){$('form-status').textContent=message;}
+function announce(message){for(const id of ['form-status','advanced-status'])if($(id))$(id).textContent=message;}
 function phaseLabel(){
   const active=state.view==='single'?state.options.filter(option=>option.id===state.selectedId):state.options;
   const frame=createProjectRenderState(state.project,state.time,{images:layerImages});
@@ -132,7 +132,7 @@ function renderEditor(){
   });
   $('option-count').textContent=`${state.options.length} 项`;$('add-option').hidden=locked;$('add-option').disabled=state.options.length>=APP_CONFIG.maxOptions;$('preset-picker').hidden=!locked;
   $('import-settings').disabled=locked;
-  document.querySelector('.editor h2').textContent=locked?'选项预设':'编辑内容';
+  document.querySelector('#content-panel h2').textContent=locked?'选项预设':'编辑内容';
   $('preset-select').value=state.source.presetId??PRESETS[0].id;$('reset').textContent=locked?'恢复默认预设':'恢复默认内容';updateSelect();
 }
 function replaceOptions(options){
@@ -351,6 +351,13 @@ function snapshot(){return structuredClone({project:state.project,options:state.
 $('view-grid').onclick=()=>setView('grid');$('view-single').onclick=()=>setView('single');$('selected-option').onchange=e=>setView('single',e.target.value);
 $('aspect-select').onchange=e=>setAspect(e.target.value);
 $('export-settings').onclick=downloadSettings;
+const advancedDialog=$('advanced-dialog'),advancedOpen=$('advanced-open'),advancedClose=$('advanced-close');
+function closeAdvanced(){if(!advancedDialog.open)return;advancedDialog.close();advancedOpen.setAttribute('aria-expanded','false');advancedOpen.focus({preventScroll:true});}
+advancedOpen.onclick=()=>{if(!advancedDialog.open)advancedDialog.show();advancedOpen.setAttribute('aria-expanded','true');advancedClose.focus({preventScroll:true});};
+advancedClose.onclick=closeAdvanced;
+advancedDialog.addEventListener('cancel',event=>{event.preventDefault();closeAdvanced();});
+advancedDialog.addEventListener('close',()=>advancedOpen.setAttribute('aria-expanded','false'));
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&advancedDialog.open){event.preventDefault();closeAdvanced();}});
 $('export-frames').onclick=openFrameExport;$('frame-export-start').onclick=()=>void runFrameExport();
 $('frame-export-cancel').onclick=()=>{if(!frameExportController)return;$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController.abort();};
 $('frame-export-dialog').addEventListener('cancel',event=>{if(frameExportRunning){event.preventDefault();$('frame-export-status').textContent='正在取消并释放编码资源…';$('frame-export-cancel').disabled=true;frameExportController?.abort();}else frameExportSupportRevision++;});
