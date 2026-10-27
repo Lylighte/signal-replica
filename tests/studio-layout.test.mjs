@@ -51,9 +51,8 @@ test('unsafe explicit density is reported instead of silently changing the grid'
   assert.throws(()=>planStudioLayout(options(17)),/最多支持 16/);
 });
 
-test('dense option sets keep one readable selection label per panel while the original four-option effect is unchanged',()=>{
+test('panel selection row keeps the full option list for both sparse and dense sets',()=>{
   const original=options(4),dense=options(16);
   assert.equal(panelSelectionOptions(original,original[2]),original);
-  assert.deepEqual(panelSelectionOptions(dense,dense[12]),[dense[12]]);
+  assert.equal(panelSelectionOptions(dense,dense[12]),dense);
 });
-

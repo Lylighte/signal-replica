@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {validateOptions,resolveOptionSource,PRESETS,APP_CONFIG,REFERENCE_OFFSET} from '../dist/config.js';
-import {layoutPanels,reelPosition,optionPositions,optionEntrance,selectedOptionOpacity,preRollNoise,expansionEase,expansionProgress,easeInOutQuad,numberColumns,entryState,entryGlitch,columnPosition,reelPitch,labelPositions,placeReelPosition,placeSpeedMultiplier,reelSpeed} from '../dist/engine.js';
+import {layoutPanels,reelPosition,optionPositions,optionEntrance,selectedOptionOpacity,preRollNoise,expansionEase,expansionProgress,easeInOutQuad,numberColumns,entryState,entryGlitch,columnPosition,reelPitch,labelPositions,placeReelPosition,placeSpeedMultiplier,reelSpeed,panelSelectionOptions} from '../dist/engine.js';
 import {MOTION} from '../dist/config.js';
 import {DEFAULT_DESIGN,DESIGN_FIELDS,DESIGN_GROUPS,validateDesign,outsideSliderRange} from '../dist/design.js';
 import {moveOption,importSettings,exportSettings,previewIssue,ASPECTS} from '../dist/editor-data.js';
@@ -54,6 +54,27 @@ test('selection translates only the chosen option to the centre and sends others
   assert.equal(end[1].x,360);assert.ok(start[1].x<360);
   assert.ok(end[0].x<0);assert.ok(end[2].x>720);assert.ok(end[3].x>720);
   assert.ok(end.every(p=>p.y===270));
+});
+test('one to sixteen options keep full selection rows in grid and single views across key animation phases',()=>{
+  const phases=[0,MOTION.selectStart+.12,MOTION.expandStart+.01,APP_CONFIG.duration],counts=[1,4,5,8,16];
+  for(const count of counts){
+    const options=Array.from({length:count},(_,i)=>({id:`id-${i}`,label:`L${i+1}`,value:String(i)}));
+    const selectedIndexes=[0,Math.floor((count-1)/2),count-1];
+    for(const selectedIndex of selectedIndexes){
+      const selectedId=options[selectedIndex].id;
+      for(const view of ['grid','single']){
+        const panels=layoutPanels(options,view,selectedId);
+        assert.ok(panels.length>=1);
+        for(const panel of panels)assert.equal(panelSelectionOptions(options,panel.option),options);
+      }
+      for(const time of phases){
+        const positions=optionPositions(time,count,selectedIndex);
+        assert.equal(positions.length,count);
+        assert.equal(positions.filter(item=>item.selected).length,1);
+        assert.equal(positions[selectedIndex].selected,true);
+      }
+    }
+  }
 });
 test('long expansion contains the first numeric reveal and glitch episode',()=>{
   assert.equal(easeInOutQuad(.25),.125);assert.equal(easeInOutQuad(.75),.875);
