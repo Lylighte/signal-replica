@@ -164,10 +164,7 @@ export function layoutPanels(options,view,selectedId,{width=WIDTH,height=HEIGHT,
     return {option,index:first+index,scale,x:safeLeft+(safeWidth-rowWidth)/2+(index%cols)*(720*scale+spacing),y:top+row*(540*scale+spacing)};
   });
 }
-// The original four-option composition intentionally repeats the selection
-// row in every panel. Beyond four options that row becomes unreadable, so a
-// dense Studio layout animates each panel's own option instead.
-export const panelSelectionOptions=(options,option)=>options.length<=4?options:[option];
+export const panelSelectionOptions=(options,_option)=>options;
 function makeCanvas(w,h){const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;return canvas;}
 
 export function createViewportMapping(pixelWidth,pixelHeight,{aspect='16:9',framing='reflow'}={}){
