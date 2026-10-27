@@ -290,15 +290,16 @@ export class SignalRenderer {
     ctx.font=`${design.labelWeight} ${design.labelSize}px ${JSON.stringify(family)}, Saira, "Microsoft YaHei", sans-serif`;
     if(time<MOTION.expandStart){
       const entrance=optionEntrance(time,design),selectedIndex=allOptions.findIndex(o=>o.id===option.id),positions=optionPositions(time,allOptions.length,selectedIndex,design);
+      const compactLabelWidth=Math.min(94,540/allOptions.length),selectedLabelWidth=allOptions.length<=4?160:compactLabelWidth;
       allOptions.forEach((other,index)=>{
         const {x,y,selected,exitProgress,exitExpand}=positions[index];
         ctx.save();ctx.translate(x,y);ctx.scale(entrance.scale,entrance.scale);
         if(this.supportsFilter&&entrance.blur>.05)ctx.filter=`blur(${entrance.blur}px)`;
         const text='<'+other.label+'>',alpha=entrance.alpha*Math.pow(1-exitProgress,.35)*(selected?selectedOptionOpacity(time,design):1);
         if(!selected&&exitExpand>0){
-          const fit=Math.min(1,Math.min(94,540/allOptions.length)/Math.max(1,ctx.measureText(text).width));ctx.scale(fit,1);
+          const fit=Math.min(1,compactLabelWidth/Math.max(1,ctx.measureText(text).width));ctx.scale(fit,1);
           this.drawExpandedLabel(ctx,text,design.exitLetterSpread*exitExpand,alpha);
-        }else this.drawLabel(ctx,text,0,0,selected?160:Math.min(94,540/allOptions.length),alpha);
+        }else this.drawLabel(ctx,text,0,0,selected?selectedLabelWidth:compactLabelWidth,alpha);
         ctx.restore();
       });return;
     }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {validateOptions,resolveOptionSource,PRESETS,APP_CONFIG,REFERENCE_OFFSET} from '../dist/config.js';
-import {layoutPanels,reelPosition,optionPositions,optionEntrance,selectedOptionOpacity,preRollNoise,expansionEase,expansionProgress,easeInOutQuad,numberColumns,entryState,entryGlitch,columnPosition,reelPitch,labelPositions,placeReelPosition,placeSpeedMultiplier,reelSpeed,panelSelectionOptions} from '../dist/engine.js';
+import {layoutPanels,reelPosition,optionPositions,optionEntrance,selectedOptionOpacity,preRollNoise,expansionEase,expansionProgress,easeInOutQuad,numberColumns,entryState,entryGlitch,columnPosition,reelPitch,labelPositions,placeReelPosition,placeSpeedMultiplier,reelSpeed,panelSelectionOptions,SignalRenderer} from '../dist/engine.js';
 import {MOTION} from '../dist/config.js';
 import {DEFAULT_DESIGN,DESIGN_FIELDS,DESIGN_GROUPS,validateDesign,outsideSliderRange} from '../dist/design.js';
 import {moveOption,importSettings,exportSettings,previewIssue,ASPECTS} from '../dist/editor-data.js';
@@ -75,6 +75,31 @@ test('one to sixteen options keep full selection rows in grid and single views a
       }
     }
   }
+});
+test('dense selection rows clip intentionally at intro start but settle fully inside panel by intro end',()=>{
+  for(const count of [5,8,16]){
+    const selectedIndex=Math.floor((count-1)/2),start=optionPositions(0,count,selectedIndex).map(item=>item.x);
+    const settled=optionPositions(DEFAULT_DESIGN.introDuration,count,selectedIndex).map(item=>item.x);
+    assert.ok(start.some(x=>x<0||x>720));
+    assert.ok(settled.every(x=>x>=0&&x<=720));
+    const compactWidth=Math.min(94,540/count);
+    for(let i=1;i<settled.length;i++)assert.ok(settled[i]-settled[i-1]>=compactWidth-1e-8);
+  }
+});
+test('panel renderer uses compact selected label widths for dense sets to avoid overlap spikes',()=>{
+  const options=Array.from({length:16},(_,index)=>({id:`id-${index}`,label:`L${index+1}`,value:String(index)}));
+  const rendererLike={design:DEFAULT_DESIGN,sceneStyle:{fonts:{}},supportsFilter:false,drawLabelCalls:[],drawExpandedCalls:0,
+    drawLabel(_ctx,text,x,y,maxWidth,alpha){this.drawLabelCalls.push({text,x,y,maxWidth,alpha});},
+    drawExpandedLabel(){this.drawExpandedCalls++;}
+  };
+  const stack=[];
+  const context={font:'',globalAlpha:1,save(){stack.push({});},restore(){stack.pop();},translate(x,y){const top=stack.at(-1);if(top){top.x=x;top.y=y;}},scale(){},measureText(text){return{width:text.length*12};}};
+  SignalRenderer.prototype.panel.call(rendererLike,context,options[7],options,DEFAULT_DESIGN.introDuration);
+  assert.equal(rendererLike.drawExpandedCalls,0);
+  assert.equal(rendererLike.drawLabelCalls.length,16);
+  const selected=rendererLike.drawLabelCalls.find(call=>call.text===`<${options[7].label}>`);
+  assert.equal(selected.maxWidth,Math.min(94,540/16));
+  assert.ok(rendererLike.drawLabelCalls.every(call=>call.maxWidth<=Math.min(94,540/16)));
 });
 test('long expansion contains the first numeric reveal and glitch episode',()=>{
   assert.equal(easeInOutQuad(.25),.125);assert.equal(easeInOutQuad(.75),.875);
